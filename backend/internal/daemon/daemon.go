@@ -669,6 +669,7 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return fmt.Errorf("wire session service: %w", err)
 	}
+	sessionSvc.SetMoveNoter(chatSvc)
 	if usage != nil {
 		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
@@ -1251,6 +1252,7 @@ func Run(buildVersion string) (retErr error) {
 		Installer:          systemInstall,
 		ComputerUse:        computerUse,
 		Sessions:           sessionSvc,
+		SessionMoves:       sessionSvc,
 		Automations:        automationSvc,
 		DesktopWorkspaces:  sessionSvc,
 		PRs:                prActions,
