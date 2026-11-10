@@ -134,13 +134,22 @@ func TestCompareRefusesIncomparableRuns(t *testing.T) {
 	}
 }
 
-func TestCompareAllowsLabeledClientChange(t *testing.T) {
+func TestAllowedClientChangeIsNeverAPass(t *testing.T) {
 	baseline, candidate, ceilings, opts := loadSamples(t)
 	candidate.ClientSourceSha256 = strings.Repeat("9", 64)
 	opts.AllowClientChange = true
 	report := transferbench.Compare(baseline, candidate, ceilings, opts)
-	if report.ExitCode != transferbench.ExitPass || !hasReason(report, "client-source-unmodeled-allowed", "") {
-		t.Fatalf("exit %d reasons %+v", report.ExitCode, report.Reasons)
+	if report.Status != transferbench.StatusUnverified || report.ExitCode != transferbench.ExitIncomparable ||
+		!hasReason(report, "client-source-unmodeled-allowed", "") {
+		t.Fatalf("status %s exit %d reasons %+v", report.Status, report.ExitCode, report.Reasons)
+	}
+	if !strings.Contains(transferbench.RenderMarkdown(report), "**Unverified:**") {
+		t.Fatal("the Markdown report does not label the comparison unverified")
+	}
+	// A real failure still reports as a failure.
+	candidate.Scenarios[0].Metrics.WireBytesIn = ceilings.Rows[0].Max.WireBytesIn + 1
+	if report := transferbench.Compare(baseline, candidate, ceilings, opts); report.ExitCode != transferbench.ExitFail {
+		t.Fatalf("a budget failure under --allow-client-change exited %d", report.ExitCode)
 	}
 }
 

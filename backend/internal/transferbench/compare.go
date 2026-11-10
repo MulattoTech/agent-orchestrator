@@ -7,6 +7,9 @@ const (
 	StatusPass         = "pass"
 	StatusFail         = "fail"
 	StatusIncomparable = "incomparable"
+	// StatusUnverified is a comparison that met every budget but measured a
+	// renderer the client simulator does not model. It is never a pass.
+	StatusUnverified = "unverified"
 
 	ExitPass         = 0
 	ExitFail         = 1
@@ -18,6 +21,7 @@ const (
 	SeverityInfo         = "info"
 	SeverityFail         = "fail"
 	SeverityIncomparable = "incomparable"
+	SeverityUnverified   = "unverified"
 )
 
 // Options are the trusted inputs a comparison checks the runs against. They
@@ -31,7 +35,8 @@ type Options struct {
 	ExpectBaselineRef  string
 	ExpectCandidateRef string
 	// AllowClientChange compares runs whose renderer source differs from what
-	// the client simulator models. Rows are then labeled, never silently passed.
+	// the client simulator models, to show their numbers. Such a comparison is
+	// reported as unverified (exit 2) when nothing failed: never as a pass.
 	AllowClientChange bool
 }
 
@@ -174,7 +179,7 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 	}
 	if clientChanged {
 		if opts.AllowClientChange {
-			add("client-source-unmodeled-allowed", SeverityInfo, ScenarioKey{}, "")
+			add("client-source-unmodeled-allowed", SeverityUnverified, ScenarioKey{}, "")
 		} else {
 			global("client-source-unmodeled")
 		}
@@ -245,6 +250,8 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 		report.Status, report.ExitCode = StatusIncomparable, ExitIncomparable
 	case hasSeverity(report.Reasons, SeverityFail):
 		report.Status, report.ExitCode = StatusFail, ExitFail
+	case hasSeverity(report.Reasons, SeverityUnverified):
+		report.Status, report.ExitCode = StatusUnverified, ExitIncomparable
 	default:
 		report.Status, report.ExitCode = StatusPass, ExitPass
 	}

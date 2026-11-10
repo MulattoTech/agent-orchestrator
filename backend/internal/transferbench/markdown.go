@@ -17,6 +17,11 @@ func RenderMarkdown(r Report) string {
 		escapeMarkdown(shortRef(r.Baseline.SourceRef)), escapeMarkdown(shortRef(r.Candidate.SourceRef)),
 		dirtyLabel(r.Candidate.Dirty), escapeMarkdown(r.Candidate.GoVersion),
 		escapeMarkdown(r.Candidate.GOOS), escapeMarkdown(r.Candidate.GOARCH))
+	if hasSeverity(r.Reasons, SeverityUnverified) {
+		b.WriteString("**Unverified:** the renderer source differs from what the client simulator models " +
+			"(`--allow-client-change`). Request counts and refresh behavior may not match the real client; " +
+			"this comparison is not a pass.\n\n")
+	}
 	b.WriteString("Bytes are counted at the simulated client's TCP sockets over loopback: HTTP/1.1 status lines, " +
 		"headers, chunked framing, and bodies. TLS, TCP/IP, HTTP/2 and WebSocket tunnel framing are not included. " +
 		"`remote-lan` bodies are gzip-encoded by the daemon's own LAN middleware; `local` bodies are never encoded. " +

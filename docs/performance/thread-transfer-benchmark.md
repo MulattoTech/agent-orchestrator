@@ -196,9 +196,10 @@ transport ids, and `wireBytesIn` equal to its parts.
 Incomparable (exit 2): different harness, fixtures, toolchain or ceilings
 digest; a dirty baseline; refs other than requested; a missing scenario or
 ceiling row; differing expected states; a baseline that did not reproduce its
-expected state; or renderer source that differs from what the simulator models
-(unless `--allow-client-change`, which labels the report). No relative change is
-reported for an incomparable pair.
+expected state; or renderer source that differs from what the simulator models.
+`--allow-client-change` shows the numbers for such a pair, but the report is
+labeled unverified and exits 2 unless something failed: it is never a pass. No
+relative change is reported for an incomparable pair.
 
 Fail (exit 1): any candidate metric above its absolute ceiling (equal passes),
 above `baseline + baseline × maxIncreasePermille / 1000` (integer arithmetic),
