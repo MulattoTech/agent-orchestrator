@@ -1,0 +1,299 @@
+package transferbench_test
+
+import (
+	"crypto/sha1" //nolint:gosec // computes git object ids for the test tree.
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/transferbench"
+)
+
+func loadSamples(t *testing.T) (transferbench.Run, transferbench.Run, transferbench.Ceilings, transferbench.Options) {
+	t.Helper()
+	runBytes, err := os.ReadFile("testdata/sample-run.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ceilingBytes, err := os.ReadFile("testdata/sample-ceilings.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := transferbench.DecodeRun(runBytes)
+	if err != nil {
+		t.Fatalf("sample run rejected: %v", err)
+	}
+	candidate, err := transferbench.DecodeRun(runBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Side = "candidate"
+	candidate.Scenarios = append([]transferbench.Scenario(nil), baseline.Scenarios...)
+	ceilings, err := transferbench.DecodeCeilings(ceilingBytes)
+	if err != nil {
+		t.Fatalf("sample ceilings rejected: %v", err)
+	}
+	return baseline, candidate, ceilings, transferbench.Options{CeilingsSha256: transferbench.SHA256Hex(ceilingBytes)}
+}
+
+func TestCompareIdenticalRunsPasses(t *testing.T) {
+	baseline, candidate, ceilings, opts := loadSamples(t)
+	report := transferbench.Compare(baseline, candidate, ceilings, opts)
+	if report.Status != transferbench.StatusPass || report.ExitCode != transferbench.ExitPass {
+		t.Fatalf("status %s exit %d reasons %+v", report.Status, report.ExitCode, report.Reasons)
+	}
+	if len(report.Rows) != 2 || report.Rows[0].Phase != "history-open" {
+		t.Fatalf("rows not in allowlist order: %+v", report.Rows)
+	}
+}
+
+func TestCompareCeilingIsInclusive(t *testing.T) {
+	baseline, candidate, ceilings, opts := loadSamples(t)
+	ceilings.MaxIncreasePermille = 1000
+	ceiling := ceilings.Rows[0].Max.WireBytesIn
+	candidate.Scenarios[0].Metrics.WireBytesIn = ceiling
+	if report := transferbench.Compare(baseline, candidate, ceilings, opts); report.ExitCode != transferbench.ExitPass {
+		t.Fatalf("value equal to the ceiling failed: %+v", report.Reasons)
+	}
+	candidate.Scenarios[0].Metrics.WireBytesIn = ceiling + 1
+	report := transferbench.Compare(baseline, candidate, ceilings, opts)
+	if report.ExitCode != transferbench.ExitFail || !hasReason(report, "over-ceiling", "wireBytesIn") {
+		t.Fatalf("ceiling+1 did not fail: %+v", report.Reasons)
+	}
+}
+
+func TestCompareRelativeIncreaseFailsUnderTheCeiling(t *testing.T) {
+	baseline, candidate, ceilings, opts := loadSamples(t)
+	// 2.0% of 42000 is 840: 42840 is allowed, 42841 is not.
+	ceilings.Rows[0].Max.BodyDecodedBytes = 50_000
+	candidate.Scenarios[0].Metrics.BodyDecodedBytes = 42_840
+	if report := transferbench.Compare(baseline, candidate, ceilings, opts); report.ExitCode != transferbench.ExitPass {
+		t.Fatalf("increase at the cap failed: %+v", report.Reasons)
+	}
+	candidate.Scenarios[0].Metrics.BodyDecodedBytes = 42_841
+	report := transferbench.Compare(baseline, candidate, ceilings, opts)
+	if report.ExitCode != transferbench.ExitFail || !hasReason(report, "regressed", "bodyDecodedBytes") {
+		t.Fatalf("increase past the cap did not fail: %+v", report.Reasons)
+	}
+}
+
+func TestCompareSemanticLossFailsEvenWhenSmaller(t *testing.T) {
+	baseline, candidate, ceilings, opts := loadSamples(t)
+	scenario := &candidate.Scenarios[1]
+	scenario.Metrics.BodyEncodedBytes /= 2
+	scenario.Metrics.BodyDecodedBytes /= 2
+	scenario.State.ClientDigest = strings.Repeat("6", 64)
+	report := transferbench.Compare(baseline, candidate, ceilings, opts)
+	if report.ExitCode != transferbench.ExitFail || !hasReason(report, "candidate-state-mismatch", "") {
+		t.Fatalf("dropped content passed: %+v", report.Reasons)
+	}
+}
+
+func TestCompareRefusesIncomparableRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(base, cand *transferbench.Run, opts *transferbench.Options)
+		code   string
+	}{
+		{"harness", func(_, c *transferbench.Run, _ *transferbench.Options) { c.HarnessSha256 = strings.Repeat("9", 64) }, "harness-mismatch"},
+		{"fixtures", func(_, c *transferbench.Run, _ *transferbench.Options) { c.FixturesSha256 = strings.Repeat("9", 64) }, "fixtures-mismatch"},
+		{"ceilings", func(_, _ *transferbench.Run, o *transferbench.Options) { o.CeilingsSha256 = strings.Repeat("9", 64) }, "ceilings-mismatch"},
+		{"toolchain", func(_, c *transferbench.Run, _ *transferbench.Options) { c.GoVersion = "go1.26.0" }, "toolchain-mismatch"},
+		{"client", func(_, c *transferbench.Run, _ *transferbench.Options) {
+			c.ClientSourceSha256 = strings.Repeat("9", 64)
+		}, "client-source-unmodeled"},
+		{"baseline-dirty", func(b, _ *transferbench.Run, _ *transferbench.Options) {
+			b.Dirty, b.DirtyDiffSha256 = true, strings.Repeat("8", 64)
+		}, "baseline-dirty"},
+		{"ref", func(_, _ *transferbench.Run, o *transferbench.Options) { o.ExpectBaselineRef = strings.Repeat("0", 40) }, "baseline-ref-mismatch"},
+		{"missing-scenario", func(_, c *transferbench.Run, _ *transferbench.Options) { c.Scenarios = c.Scenarios[:1] }, "scenario-missing-in-candidate"},
+		{"expected-state", func(_, c *transferbench.Run, _ *transferbench.Options) {
+			c.Scenarios[0].State.ExpectedDigest = strings.Repeat("7", 64)
+			c.Scenarios[0].State.ClientDigest = c.Scenarios[0].State.ExpectedDigest
+			c.Scenarios[0].State.ServerDigest = c.Scenarios[0].State.ExpectedDigest
+		}, "expected-state-mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			baseline, candidate, ceilings, opts := loadSamples(t)
+			tc.mutate(&baseline, &candidate, &opts)
+			report := transferbench.Compare(baseline, candidate, ceilings, opts)
+			if report.ExitCode != transferbench.ExitIncomparable || !hasReason(report, tc.code, "") {
+				t.Fatalf("exit %d reasons %+v", report.ExitCode, report.Reasons)
+			}
+			for _, row := range report.Rows {
+				for _, metric := range row.Metrics {
+					if tc.name != "missing-scenario" && tc.name != "expected-state" && metric.RelativeAvailable {
+						t.Fatalf("incomparable runs reported a relative change for %s", metric.Name)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCompareAllowsLabeledClientChange(t *testing.T) {
+	baseline, candidate, ceilings, opts := loadSamples(t)
+	candidate.ClientSourceSha256 = strings.Repeat("9", 64)
+	opts.AllowClientChange = true
+	report := transferbench.Compare(baseline, candidate, ceilings, opts)
+	if report.ExitCode != transferbench.ExitPass || !hasReason(report, "client-source-unmodeled-allowed", "") {
+		t.Fatalf("exit %d reasons %+v", report.ExitCode, report.Reasons)
+	}
+}
+
+func TestDecodeRunRejectsLooseJSON(t *testing.T) {
+	sample, err := os.ReadFile("testdata/sample-run.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(sample)
+	for name, mutated := range map[string]string{
+		"duplicate key": strings.Replace(text, `"dirty": false,`, `"dirty": false, "dirty": false,`, 1),
+		"case variant":  strings.Replace(text, `"goos"`, `"GOOS"`, 1),
+		"unknown key":   strings.Replace(text, `"dirty": false,`, `"dirty": false, "extra": 1,`, 1),
+		"missing key":   strings.Replace(text, `"nonce": "0123456789abcdef0123456789abcdef",`, ``, 1),
+		"fraction":      strings.Replace(text, `"requests": 1,`, `"requests": 1.0,`, 1),
+		"exponent":      strings.Replace(text, `"requests": 1,`, `"requests": 1e0,`, 1),
+		"negative":      strings.Replace(text, `"requests": 1,`, `"requests": -1,`, 1),
+		"quoted":        strings.Replace(text, `"requests": 1,`, `"requests": "1",`, 1),
+		"too large":     strings.Replace(text, `"requests": 1,`, `"requests": 1000000001,`, 1),
+		"trailing data": text + "{}",
+		"bom":           "\xef\xbb\xbf" + text,
+		"wire sum":      strings.Replace(text, `"wireBytesIn": 5192,`, `"wireBytesIn": 5193,`, 1),
+		"bad ref":       strings.Replace(text, `999321b38cc5f57bc53ab9c255cb10c4e8999e68`, `main`, 1),
+		"provider":      strings.Replace(text, `"provider": "codex"`, `"provider": "gemini"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if mutated == text {
+				t.Fatal("mutation did not apply")
+			}
+			if _, err := transferbench.DecodeRun([]byte(mutated)); err == nil {
+				t.Fatal("accepted")
+			}
+		})
+	}
+}
+
+func TestMarkdownEscapesEveryString(t *testing.T) {
+	report := transferbench.Report{
+		Status:  "pass|`x`",
+		Reasons: []transferbench.Reason{{Code: "a|b<script>", Severity: "info", Scenario: "x\ny"}},
+		Rows:    []transferbench.ReportRow{{Provider: "c|d", Phase: "p", Transport: "t", Status: "pass"}},
+	}
+	markdown := transferbench.RenderMarkdown(report)
+	for _, raw := range []string{"a|b", "<script>", "c|d", "x\ny"} {
+		if strings.Contains(markdown, raw) {
+			t.Fatalf("unescaped %q in:\n%s", raw, markdown)
+		}
+	}
+	if !strings.Contains(markdown, `a\|b&lt;script&gt;`) {
+		t.Fatalf("escaped reason missing:\n%s", markdown)
+	}
+}
+
+func writeFile(t *testing.T, root, rel, content string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOverlayOnlyAddsHarnessFiles(t *testing.T) {
+	candidate := t.TempDir()
+	writeFile(t, candidate, transferbench.HarnessPackageDir+"/schema.go", "package transferbench\n")
+	writeFile(t, candidate, transferbench.HarnessTestFile, "package httpd\n")
+	writeFile(t, candidate, "backend/internal/httpd/events.go", "candidate product code\n")
+
+	baseline := t.TempDir()
+	writeFile(t, baseline, "backend/internal/httpd/events.go", "baseline product code\n")
+	entries, err := transferbench.Overlay(candidate, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Mode != "added" {
+		t.Fatalf("entries %+v", entries)
+	}
+	product, _ := os.ReadFile(filepath.Join(baseline, "backend/internal/httpd/events.go"))
+	if string(product) != "baseline product code\n" {
+		t.Fatal("overlay replaced baseline product code")
+	}
+	// A second overlay finds identical files and adds nothing.
+	if entries, err := transferbench.Overlay(candidate, baseline); err != nil || entries[0].Mode != "identical" {
+		t.Fatalf("re-overlay: %+v %v", entries, err)
+	}
+	// A baseline that already has a different harness file is never shadowed.
+	writeFile(t, baseline, transferbench.HarnessTestFile, "package httpd // older harness\n")
+	if _, err := transferbench.Overlay(candidate, baseline); err == nil {
+		t.Fatal("overlay shadowed a different baseline harness file")
+	}
+}
+
+func TestOverlayRefusesSymlinkedHarnessFiles(t *testing.T) {
+	candidate := t.TempDir()
+	writeFile(t, candidate, transferbench.HarnessTestFile, "package httpd\n")
+	writeFile(t, candidate, "outside.go", "package secret\n")
+	link := filepath.Join(candidate, filepath.FromSlash(transferbench.HarnessPackageDir), "link.go")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(candidate, "outside.go"), link); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	if _, err := transferbench.Overlay(candidate, t.TempDir()); err == nil {
+		t.Fatal("overlay followed a symlink")
+	}
+}
+
+func blobID(content string) string {
+	h := sha1.New() //nolint:gosec // git object id.
+	h.Write([]byte("blob " + strconv.Itoa(len(content)) + "\x00" + content))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func TestVerifyExportBindsTheTreeToTheCommit(t *testing.T) {
+	product := "package httpd\n"
+	lsTree := []byte("100644 blob " + blobID(product) + "\tbackend/internal/httpd/events.go\x00")
+	export := t.TempDir()
+	writeFile(t, export, "backend/internal/httpd/events.go", product)
+	writeFile(t, export, transferbench.HarnessTestFile, "package httpd // harness\n")
+	overlay := []transferbench.OverlayEntry{{
+		Path: transferbench.HarnessTestFile, Sha256: transferbench.SHA256Hex([]byte("package httpd // harness\n")), Mode: "added",
+	}}
+	if err := transferbench.VerifyExport(export, lsTree, overlay); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, export, "backend/internal/httpd/events.go", "package httpd // candidate code\n")
+	if err := transferbench.VerifyExport(export, lsTree, overlay); err == nil {
+		t.Fatal("a modified product file passed")
+	}
+	writeFile(t, export, "backend/internal/httpd/events.go", product)
+	writeFile(t, export, "backend/internal/httpd/extra.go", "package httpd\n")
+	if err := transferbench.VerifyExport(export, lsTree, overlay); err == nil {
+		t.Fatal("an extra file passed")
+	}
+	if err := os.Remove(filepath.Join(export, "backend/internal/httpd/extra.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(export, "backend/internal/httpd/events.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := transferbench.VerifyExport(export, lsTree, overlay); err == nil {
+		t.Fatal("a missing file passed")
+	}
+}
+
+func hasReason(report transferbench.Report, code, metric string) bool {
+	for _, reason := range report.Reasons {
+		if reason.Code == code && (metric == "" || reason.Metric == metric) {
+			return true
+		}
+	}
+	return false
+}
