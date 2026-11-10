@@ -145,6 +145,12 @@ canonical text: ordered rows (kind, role or activity kind, status, sha256 of
 message text or activity summary plus settled detail text, output size) and the
 states of the turns they belong to. Then:
 
+- the server text must match the fixture-only oracle that
+  `scripts/transfer-benchmark-oracle.py` derives without running the product
+  (`testdata/expected/oracle-*.txt`): the whole history and every cut output
+  exactly, and the live turn's rows as the view's final rows. The oracle is an
+  independent Python re-implementation of the fixture rules, so an expected
+  state can never be blessed from product output alone;
 - the server text must equal the committed expected state
   (`backend/internal/transferbench/testdata/expected/*.txt`);
 - the client text must equal the server text;

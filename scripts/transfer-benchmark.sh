@@ -86,7 +86,7 @@ mkdir -p "$out_dir" "$baseline_root" "$work/bin" "$work/gotmp"
 
 # One Go configuration for every step: no workspace file, no toolchain or
 # module downloads, read-only module graph, private temporary build output.
-go_env=(env GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOPROXY=off GOTMPDIR="$work/gotmp")
+go_env=(env GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOPROXY=off GOMAXPROCS=2 GOTMPDIR="$work/gotmp")
 
 echo "baseline  $baseline_ref = $base_sha"
 echo "candidate working tree on $head_sha${dirty_sha:+ (uncommitted changes $dirty_sha)}"

@@ -113,6 +113,9 @@ func TestTransferBenchmark(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read expected state %s (set %s=1 to create it): %v", name, benchEnvUpdate, err)
 		}
+		if problem := checkOracle(expectedDir, result); problem != "" && result.fixtureProblem == "" {
+			result.fixtureProblem = problem
+		}
 		clientText := result.clientText
 		if result.fixtureProblem != "" {
 			t.Errorf("%s: fixture content check failed: %s", scenario.Key(), result.fixtureProblem)
@@ -1394,6 +1397,51 @@ func checkFixtureContent(turns []transferbench.Turn, view benchPage, policy tran
 				return "a remote output exceeds the output limit"
 			}
 		}
+	}
+	return ""
+}
+
+// checkOracle holds the server state to the fixture-only oracle that
+// scripts/transfer-benchmark-oracle.py derives without running the product, so
+// an expected state can never be blessed from product output alone: the whole
+// history and every cut output must match it exactly, and the live turn's rows
+// must be the view's final rows.
+func checkOracle(expectedDir string, result benchResult) string {
+	scenario := result.scenario
+	var name string
+	switch scenario.Phase {
+	case "history-full":
+		name = "oracle-" + scenario.Provider + "-history.txt"
+	case "expand-output":
+		name = "oracle-" + scenario.Provider + "-expand.txt"
+	case "live-turn":
+		name = "oracle-" + scenario.Provider + "-live.txt"
+	default:
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(expectedDir, name))
+	if err != nil {
+		return "oracle " + name + " is missing; run scripts/transfer-benchmark-oracle.py"
+	}
+	oracle := string(data)
+	if scenario.Phase != "live-turn" {
+		if oracle != result.serverText {
+			return "server state differs from " + name + ": " + firstDifference(oracle, result.serverText)
+		}
+		return ""
+	}
+	rows := func(text string) []string {
+		var lines []string
+		for _, line := range strings.SplitAfter(text, "\n") {
+			if line != "" && !strings.HasPrefix(line, "turn\t") {
+				lines = append(lines, line)
+			}
+		}
+		return lines
+	}
+	want, got := rows(oracle), rows(result.serverText)
+	if len(got) < len(want) || !slices.Equal(got[len(got)-len(want):], want) {
+		return "the live turn's rows differ from " + name
 	}
 	return ""
 }
