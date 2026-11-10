@@ -35,7 +35,10 @@ type Fixture struct {
 
 // TurnTemplate is one user message and the provider events that answer it.
 // The token {n} in any string, including inside Detail, becomes the turn
-// number so every expanded turn carries distinct ids and text.
+// number so every expanded turn carries distinct ids and text. The token
+// {streamed} in Text, or as a whole JSON string in Detail, becomes the text the
+// same item's deltas streamed so far, so a settled event repeats exactly what
+// streamed, as the Codex and ACP adapters do.
 type TurnTemplate struct {
 	User  string `json:"user"`
 	Steps []Step `json:"steps"`
@@ -52,9 +55,12 @@ type Step struct {
 	Summary      string          `json:"summary,omitempty"`
 	Detail       json.RawMessage `json:"detail,omitempty"`
 	TurnState    string          `json:"turnState,omitempty"`
-	// Repeat replays a delta step this many times, each with " {r}" (the
-	// repetition number) available in Delta. Zero means once.
+	// Repeat replays a delta step this many times, with {r} in Delta replaced
+	// by the repetition number. Zero means once.
 	Repeat int `json:"repeat,omitempty"`
+	// Join sends the repeated deltas as one event, as a provider does when a
+	// fast command finishes before its output is flushed in pieces.
+	Join bool `json:"join,omitempty"`
 }
 
 // StepKinds are the event kinds a fixture may script.
@@ -109,8 +115,11 @@ func (t TurnTemplate) validate() error {
 		if !slices.Contains(StepKinds, step.Kind) {
 			return fmt.Errorf("step kind %q is not supported", step.Kind)
 		}
-		if step.Repeat < 0 || (step.Repeat > 0 && !strings.HasSuffix(step.Kind, ".delta")) {
+		if step.Repeat < 0 || ((step.Repeat > 0 || step.Join) && !strings.HasSuffix(step.Kind, ".delta")) {
 			return errors.New("only delta steps repeat")
+		}
+		if step.Join && step.Repeat < 2 {
+			return errors.New("join needs repeat of at least 2")
 		}
 		if len(step.Detail) > 0 && !json.Valid(step.Detail) {
 			return errors.New("step detail is not valid JSON")
@@ -135,17 +144,29 @@ func expand(t TurnTemplate, n int) Turn {
 	number := strconv.Itoa(n)
 	sub := func(s string) string { return strings.ReplaceAll(s, "{n}", number) }
 	turn := Turn{Number: n, User: sub(t.User)}
+	streamed := map[string]string{}
 	for _, step := range t.Steps {
-		count := max(step.Repeat, 1)
-		for r := 1; r <= count; r++ {
+		item := sub(step.Item)
+		deltas := make([]string, 0, max(step.Repeat, 1))
+		for r := 1; r <= max(step.Repeat, 1); r++ {
+			deltas = append(deltas, strings.ReplaceAll(sub(step.Delta), "{r}", strconv.Itoa(r)))
+		}
+		if step.Join {
+			deltas = []string{strings.Join(deltas, "")}
+		}
+		for _, delta := range deltas {
 			expanded := step
-			expanded.Repeat = 0
-			expanded.Item = sub(step.Item)
-			expanded.Delta = strings.ReplaceAll(sub(step.Delta), "{r}", strconv.Itoa(r))
-			expanded.Text = sub(step.Text)
+			expanded.Repeat, expanded.Join = 0, false
+			expanded.Item = item
+			expanded.Delta = delta
+			expanded.Text = strings.ReplaceAll(sub(step.Text), "{streamed}", streamed[item])
 			expanded.Summary = sub(step.Summary)
 			if len(step.Detail) > 0 {
-				expanded.Detail = json.RawMessage(sub(string(step.Detail)))
+				quoted, _ := json.Marshal(streamed[item])
+				expanded.Detail = json.RawMessage(strings.ReplaceAll(sub(string(step.Detail)), `"{streamed}"`, string(quoted)))
+			}
+			if strings.HasSuffix(step.Kind, ".delta") {
+				streamed[item] += delta
 			}
 			turn.Steps = append(turn.Steps, expanded)
 		}

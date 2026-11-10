@@ -150,7 +150,11 @@ func (s Scenario) validate() error {
 			return fmt.Errorf("state.%s must be a lowercase sha256", name)
 		}
 	}
-	if st.Turns == 0 || st.Messages == 0 {
+	if s.Phase == "expand-output" {
+		if st.Turns == 0 || st.Activities == 0 {
+			return errors.New("an expansion must recover activity output")
+		}
+	} else if st.Turns == 0 || st.Messages == 0 {
 		return errors.New("state must hold turns and messages")
 	}
 	return nil
