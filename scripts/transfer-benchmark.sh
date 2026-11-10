@@ -77,7 +77,12 @@ if [[ -z "$keep_work" ]]; then
 	trap 'rm -rf "$work"' EXIT
 fi
 out_dir="${out_dir:-${TMPDIR:-/tmp}/ao-transferbench-results/$(date -u +%Y%m%dT%H%M%SZ)}"
-mkdir -p "$out_dir" "$work/baseline" "$work/bin" "$work/gotmp"
+# The baseline tree lives at a stable path per commit so Go's build cache,
+# whose keys include each package directory, is reused across runs. It is
+# still deleted and exported afresh every run, then verified.
+baseline_root="${TMPDIR:-/tmp}/ao-transferbench-baseline/$base_sha"
+rm -rf "$baseline_root"
+mkdir -p "$out_dir" "$baseline_root" "$work/bin" "$work/gotmp"
 
 # One Go configuration for every step: no workspace file, no toolchain or
 # module downloads, read-only module graph, private temporary build output.
@@ -90,10 +95,10 @@ echo "ceilings  $ceilings ($ceilings_sha)"
 (cd backend && "${go_env[@]}" go build -o "$work/bin/transferbench" ./internal/transferbench/cmd/transferbench)
 bench="$work/bin/transferbench"
 
-git archive --format=tar "$base_sha" -- "${measured[@]}" | tar -x -C "$work/baseline"
+git archive --format=tar "$base_sha" -- "${measured[@]}" | tar -x -C "$baseline_root"
 git ls-tree -r -z --full-tree "$base_sha" -- "${measured[@]}" >"$work/ls-tree.bin"
-"$bench" overlay --candidate-root "$repo" --baseline-root "$work/baseline" --manifest "$work/overlay.json"
-"$bench" verify-export --export-root "$work/baseline" --ls-tree "$work/ls-tree.bin" --manifest "$work/overlay.json"
+"$bench" overlay --candidate-root "$repo" --baseline-root "$baseline_root" --manifest "$work/overlay.json"
+"$bench" verify-export --export-root "$baseline_root" --ls-tree "$work/ls-tree.bin" --manifest "$work/overlay.json"
 
 run_side() {
 	local side="$1" root="$2" ref="$3" dirty="$4"
@@ -116,7 +121,7 @@ run_side() {
 	fi
 }
 
-run_side baseline "$work/baseline" "$base_sha" ""
+run_side baseline "$baseline_root" "$base_sha" ""
 run_side candidate "$repo" "$head_sha" "$dirty_sha"
 
 status=0
