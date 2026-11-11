@@ -79,12 +79,15 @@ the daemon.
 
 | Phase | Client action | Requests |
 |---|---|---|
-| `history-open` | Open the chat: newest page (`limit=200` local; `limit=30&outputLimit=512` remote) | 1 |
+| `history-open` | Open the chat: newest page (`limit=200` local; `limit=30&outputLimit=512` remote). `limit` counts messages; the activities between them ride along within the store's page byte budget | 1 |
 | `history-full` | Open, then load older pages until `hasMoreBefore` is false (`limit=200` local; `limit=100&outputLimit=512` remote) | 1 + older pages |
 | `live-turn` | Chat already open (not counted). Connect the event stream at `after=latest`, `POST` the user message, then one refresh cycle per committed step of a tool-heavy turn | POST + refreshes |
 | `expand-output` (remote only) | Expand every tool output the remote page cut, as `fetchActivityOutput` does (`limit=1` page without `outputLimit`). An upper bound: a reader expands only what they open | one per cut output |
 
-History is 12 completed turns per provider; the live turn adds reasoning,
+History is 60 completed turns per provider (140 Codex and 120 Claude
+messages), sized so the remote open page holds only part of it and a full read
+pages; the harness fails if a remote open page holds everything. The live turn
+adds reasoning,
 streamed assistant text, several commands with long output, file edits, and a
 tool call.
 

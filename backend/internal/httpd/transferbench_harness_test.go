@@ -498,6 +498,12 @@ func (w *benchWorld) result(phase string, client *benchClient, view benchPage, m
 func (w *benchWorld) measureHistoryOpen(policy transferbench.ClientPolicy) benchResult {
 	c := w.newClient(policy)
 	c.openChat()
+	if c.remote && !c.pages[0].HasMoreBefore {
+		// A page limit counts messages; activities ride along under a byte
+		// budget. A history that fits one remote page would never exercise
+		// paging, so the fixtures are sized to overflow it.
+		w.t.Errorf("%s history fits one remote page; the fixture must overflow it", w.fixture.Provider)
+	}
 	return w.result("history-open", c, c.view(), c.metrics, nil)
 }
 
