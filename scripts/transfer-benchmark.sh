@@ -50,6 +50,9 @@ fail() {
 	exit 2
 }
 
+tmp_root="${TMPDIR:-/tmp}"
+tmp_root="${tmp_root%/}"
+
 if [[ -z "$baseline_ref" ]]; then
 	if git rev-parse --verify --quiet origin/main^{commit} >/dev/null; then baseline_ref=origin/main; else baseline_ref=main; fi
 fi
@@ -72,15 +75,15 @@ if [[ -n "$(git status --porcelain --untracked-files=all -- "${measured[@]}")" ]
 	} | sha256)"
 fi
 
-work="$(mktemp -d "${TMPDIR:-/tmp}/ao-transferbench.XXXXXX")"
+work="$(mktemp -d "$tmp_root/ao-transferbench.XXXXXX")"
 if [[ -z "$keep_work" ]]; then
 	trap 'rm -rf "$work"' EXIT
 fi
-out_dir="${out_dir:-${TMPDIR:-/tmp}/ao-transferbench-results/$(date -u +%Y%m%dT%H%M%SZ)}"
+out_dir="${out_dir:-$tmp_root/ao-transferbench-results/$(date -u +%Y%m%dT%H%M%SZ)}"
 # The baseline tree lives at a stable path per commit so Go's build cache,
 # whose keys include each package directory, is reused across runs. It is
 # still deleted and exported afresh every run, then verified.
-baseline_root="${TMPDIR:-/tmp}/ao-transferbench-baseline/$base_sha"
+baseline_root="$tmp_root/ao-transferbench-baseline/$base_sha"
 rm -rf "$baseline_root"
 mkdir -p "$out_dir" "$baseline_root" "$work/bin" "$work/gotmp"
 
@@ -104,7 +107,9 @@ run_side() {
 	local side="$1" root="$2" ref="$3" dirty="$4"
 	local module_dir
 	module_dir="$(cd "$root/backend" && "${go_env[@]}" go list -m -f '{{.Dir}}')"
-	[[ "$module_dir" == "$(cd "$root/backend" && pwd -P)" ]] || fail "$side compiles module $module_dir, not $root/backend"
+	# Compare physical paths: macOS reaches $TMPDIR through the /var symlink.
+	[[ -d "$module_dir" && "$(cd "$module_dir" && pwd -P)" == "$(cd "$root/backend" && pwd -P)" ]] ||
+		fail "$side compiles module $module_dir, not $root/backend"
 	echo "running $side harness in $root/backend"
 	local status=0
 	(cd "$root/backend" && "${go_env[@]}" \
