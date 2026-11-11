@@ -35,6 +35,11 @@ AO_TRANSFERBENCH=1 GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOPROXY=of
 Without `AO_TRANSFERBENCH=1` (or the script's variables) the test skips, so
 `go test ./...` does not pay for the replay.
 
+For analysis, `AO_TRANSFERBENCH_DUMP_DIR=<dir>` also writes every counted
+request with its decoded body, every event frame, each live-turn step, and how
+each refresh resolved (local refetch, merged tail, tail then full page) as JSON
+lines, one file per scenario. It never changes a measurement.
+
 ## What it measures, mapped to the real protocol
 
 There is no thread WebSocket and no delta payload in AO. A Chat client reads

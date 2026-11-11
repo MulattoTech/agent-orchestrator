@@ -55,6 +55,10 @@ const (
 	benchEnvDirtyDiff = "AO_TRANSFERBENCH_DIRTY_DIFF_SHA256"
 	benchEnvCeilings  = "AO_TRANSFERBENCH_CEILINGS_SHA256"
 	benchEnvUpdate    = "AO_TRANSFERBENCH_UPDATE_EXPECTED"
+	// benchEnvDump names a directory that receives every request, decoded
+	// response body, event frame and live-turn step as JSON lines, one file per
+	// scenario, for analysis. It never changes a measurement.
+	benchEnvDump = "AO_TRANSFERBENCH_DUMP_DIR"
 
 	benchProject  = domain.ProjectID("bench-project")
 	benchSession  = domain.SessionID("bench-project-1")
@@ -513,6 +517,7 @@ func (w *benchWorld) result(phase string, client *benchClient, view benchPage, m
 
 func (w *benchWorld) measureHistoryOpen(policy transferbench.ClientPolicy) benchResult {
 	c := w.newClient(policy)
+	c.startDump("history-open")
 	c.openChat()
 	if c.remote && !c.pages[0].HasMoreBefore {
 		// A page limit counts messages; activities ride along under a byte
@@ -525,6 +530,7 @@ func (w *benchWorld) measureHistoryOpen(policy transferbench.ClientPolicy) bench
 
 func (w *benchWorld) measureHistoryFull(policy transferbench.ClientPolicy) (benchResult, *benchClient) {
 	c := w.newClient(policy)
+	c.startDump("history-full")
 	c.openChat()
 	for c.pages[len(c.pages)-1].HasMoreBefore {
 		c.loadOlder()
@@ -538,6 +544,7 @@ func (w *benchWorld) measureHistoryFull(policy transferbench.ClientPolicy) (benc
 func (w *benchWorld) measureExpandOutput(history *benchClient) benchResult {
 	w.t.Helper()
 	c := w.newClient(history.policy)
+	c.startDump("expand-output")
 	view := history.view()
 	server := w.inspectAll()
 	full := map[string]benchItem{}
@@ -603,9 +610,19 @@ func (w *benchWorld) measureLiveTurn(policy transferbench.ClientPolicy) benchRes
 		w.t.Fatal(err)
 	}
 	startSeq := w.latestSeq()
+	c.startDump("live-turn")
 	c.openStream()
 	turn := w.fixture.Live()
-	w.runTurn(turn, c.postMessage, func() { w.syncStep(c) })
+	step := 0
+	w.runTurn(turn, c.postMessage, func() {
+		kind := "send"
+		if step > 0 {
+			kind = turn.Steps[step-1].Kind
+		}
+		c.record(map[string]any{"type": "step", "index": step, "kind": kind})
+		step++
+		w.syncStep(c)
+	})
 	c.closeStream()
 	c.metrics.CDCRows = w.latestSeq() - startSeq
 	// Every change row reaches the client as one frame, after the cursor frame.
@@ -848,10 +865,37 @@ type benchClient struct {
 	pages   []benchPage
 	metrics transferbench.Metrics
 	stream  *benchStream
+	dump    *json.Encoder
 }
 
 func (w *benchWorld) newClient(policy transferbench.ClientPolicy) *benchClient {
 	return &benchClient{w: w, remote: w.transport == "remote-lan", policy: policy, api: newMeteredTransport()}
+}
+
+// startDump begins recording this client's counted traffic when
+// AO_TRANSFERBENCH_DUMP_DIR is set.
+func (c *benchClient) startDump(phase string) {
+	dir := os.Getenv(benchEnvDump)
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		c.w.t.Fatal(err)
+	}
+	file, err := os.Create(filepath.Join(dir, c.w.fixture.Provider+"-"+phase+"-"+c.w.transport+".jsonl"))
+	if err != nil {
+		c.w.t.Fatal(err)
+	}
+	c.w.t.Cleanup(func() { _ = file.Close() })
+	c.dump = json.NewEncoder(file)
+}
+
+func (c *benchClient) record(entry map[string]any) {
+	if c.dump != nil {
+		if err := c.dump.Encode(entry); err != nil {
+			c.w.t.Fatal(err)
+		}
+	}
 }
 
 func (c *benchClient) decorate(req *http.Request, accept string) {
@@ -977,6 +1021,18 @@ func (c *benchClient) do(req *http.Request) []byte {
 	c.metrics.FramingBytesIn += int64(len(raw)) - header - int64(len(encoded))
 	c.metrics.WireBytesIn += int64(len(raw))
 	c.metrics.WireBytesOut += written
+	if c.dump != nil {
+		body := json.RawMessage(decoded)
+		if !json.Valid(decoded) {
+			body, _ = json.Marshal(string(decoded))
+		}
+		c.record(map[string]any{
+			"type": "request", "method": req.Method, "url": req.URL.RequestURI(), "status": resp.StatusCode,
+			"contentEncoding": resp.Header.Get("Content-Encoding"), "headerBytes": header,
+			"framingBytes": int64(len(raw)) - header - int64(len(encoded)), "encodedBytes": len(encoded),
+			"decodedBytes": len(decoded), "wireOut": written, "body": body,
+		})
+	}
 	return decoded
 }
 
@@ -1048,6 +1104,7 @@ func (c *benchClient) settled() bool {
 // the remote refreshRemoteConversation.
 func (c *benchClient) refresh() {
 	if !c.remote {
+		c.record(map[string]any{"type": "refresh", "mode": "local-refetch", "pages": len(c.pages)})
 		next := []benchPage{c.fetch(c.pageQuery(0))}
 		for len(next) < len(c.pages) && next[len(next)-1].HasMoreBefore {
 			next = append(next, c.fetch(c.pageQuery(next[len(next)-1].OldestSequence)))
@@ -1067,16 +1124,19 @@ func (c *benchClient) refresh() {
 		tail := c.fetch(query)
 		if tail.AfterSequence == floor {
 			if merged, ok := mergeRemoteConversationTail(c.pages[0], tail, floor); ok {
+				c.record(map[string]any{"type": "refresh", "mode": "tail-merged", "floor": floor})
 				c.pages[0] = merged
 				return
 			}
 		}
 		if tail.AfterSequence != 0 {
+			c.record(map[string]any{"type": "refresh", "mode": "tail-then-full", "floor": floor})
 			latest = c.fetch(c.pageQuery(0))
 		} else {
 			latest = tail
 		}
 	} else {
+		c.record(map[string]any{"type": "refresh", "mode": "full", "floor": floor})
 		latest = c.fetch(c.pageQuery(0))
 	}
 	previous := c.pages
@@ -1825,6 +1885,11 @@ func (c *benchClient) readFramesThrough(seq int64) []benchFrame {
 		frames = append(frames, frame)
 		c.metrics.SSEFrames++
 		c.stream.last = frame.id
+		c.record(map[string]any{
+			"type": "frame", "id": frame.id, "event": frame.event,
+			"bytes": len(fmt.Sprintf("id: %d\nevent: %s\ndata: %s\n\n", frame.id, frame.event, frame.data)),
+			"data":  json.RawMessage(frame.data),
+		})
 	}
 	return frames
 }
