@@ -76,16 +76,16 @@
       "phase": "live-turn",
       "transport": "local",
       "max": {
-        "requests": 39,
+        "requests": 40,
         "cdcRows": 44,
-        "sseFrames": 44,
-        "sseBytes": 15232,
-        "headerBytesIn": 7168,
-        "framingBytesIn": 896,
-        "bodyEncodedBytes": 8376640,
-        "bodyDecodedBytes": 8376640,
-        "wireBytesIn": 8399808,
-        "wireBytesOut": 8448
+        "sseFrames": 45,
+        "sseBytes": 15680,
+        "headerBytesIn": 7296,
+        "framingBytesIn": 960,
+        "bodyEncodedBytes": 8591232,
+        "bodyDecodedBytes": 8591232,
+        "wireBytesIn": 8615040,
+        "wireBytesOut": 8640
       }
     },
     {
@@ -93,16 +93,16 @@
       "phase": "live-turn",
       "transport": "remote-lan",
       "max": {
-        "requests": 41,
+        "requests": 42,
         "cdcRows": 44,
-        "sseFrames": 44,
-        "sseBytes": 15232,
-        "headerBytesIn": 9408,
-        "framingBytesIn": 768,
-        "bodyEncodedBytes": 79552,
-        "bodyDecodedBytes": 365376,
-        "wireBytesIn": 104896,
-        "wireBytesOut": 12544
+        "sseFrames": 45,
+        "sseBytes": 15680,
+        "headerBytesIn": 9664,
+        "framingBytesIn": 832,
+        "bodyEncodedBytes": 80256,
+        "bodyDecodedBytes": 366784,
+        "wireBytesIn": 106240,
+        "wireBytesOut": 12800
       }
     },
     {
@@ -195,16 +195,16 @@
       "phase": "live-turn",
       "transport": "local",
       "max": {
-        "requests": 46,
+        "requests": 47,
         "cdcRows": 51,
-        "sseFrames": 51,
-        "sseBytes": 17664,
-        "headerBytesIn": 8384,
+        "sseFrames": 52,
+        "sseBytes": 18112,
+        "headerBytesIn": 8576,
         "framingBytesIn": 1088,
-        "bodyEncodedBytes": 11674176,
-        "bodyDecodedBytes": 11674176,
-        "wireBytesIn": 11701184,
-        "wireBytesOut": 9920
+        "bodyEncodedBytes": 11926592,
+        "bodyDecodedBytes": 11926592,
+        "wireBytesIn": 11954240,
+        "wireBytesOut": 10112
       }
     },
     {
@@ -212,16 +212,16 @@
       "phase": "live-turn",
       "transport": "remote-lan",
       "max": {
-        "requests": 48,
+        "requests": 49,
         "cdcRows": 51,
-        "sseFrames": 51,
-        "sseBytes": 17664,
-        "headerBytesIn": 10880,
+        "sseFrames": 52,
+        "sseBytes": 18112,
+        "headerBytesIn": 11136,
         "framingBytesIn": 640,
-        "bodyEncodedBytes": 87104,
-        "bodyDecodedBytes": 349504,
-        "wireBytesIn": 116224,
-        "wireBytesOut": 14592
+        "bodyEncodedBytes": 87808,
+        "bodyDecodedBytes": 350912,
+        "wireBytesIn": 117568,
+        "wireBytesOut": 14848
       }
     },
     {

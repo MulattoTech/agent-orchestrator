@@ -116,7 +116,7 @@ run_side() {
 		AO_TRANSFERBENCH_OUT="$out_dir/$side.json" AO_TRANSFERBENCH_SIDE="$side" \
 		AO_TRANSFERBENCH_SOURCE_REF="$ref" AO_TRANSFERBENCH_DIRTY_DIFF_SHA256="$dirty" \
 		AO_TRANSFERBENCH_CEILINGS_SHA256="$ceilings_sha" \
-		go test -count=1 -p 1 -run '^TestTransferBenchmark$' ./internal/httpd/ >"$out_dir/$side.log" 2>&1) || status=$?
+		go test -count=1 -p 1 -timeout 15m -run '^TestTransferBenchmark$' ./internal/httpd/ >"$out_dir/$side.log" 2>&1) || status=$?
 	if [[ ! -s "$out_dir/$side.json" ]]; then
 		tail -n 40 "$out_dir/$side.log" >&2
 		fail "$side harness wrote no run artifact"

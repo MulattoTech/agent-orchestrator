@@ -352,7 +352,11 @@ func newBenchWorld(t *testing.T, fixture transferbench.Fixture, transport string
 		handler = remote.handler
 	}
 	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
+	// An open event stream would keep Close waiting forever after a failure.
+	t.Cleanup(func() {
+		server.CloseClientConnections()
+		server.Close()
+	})
 	if !server.Listener.Addr().(*net.TCPAddr).IP.IsLoopback() {
 		t.Fatal("benchmark listener must stay on loopback")
 	}
@@ -392,14 +396,26 @@ func (w *benchWorld) sendDirect(text, clientMessageID string) {
 	}
 }
 
-// emit hands one event to the projector and waits until the controller
-// acknowledges it, which it does only after the event's rows are committed.
-// One event per projector unit makes the replay independent of the 50 ms
+// emit hands one event to the projector and returns once every write the
+// event causes has committed. The controller acknowledges a unit's events
+// before its after-commit work (activity reporting, turn lifecycle), which can
+// still write rows, so the acknowledgement alone is not a barrier. The event is
+// then delivered a second time: the archive recognizes its provider event id
+// and projects nothing, as it does for a persistent host's replay, and the
+// controller reads it only after the previous unit has fully returned. Its
+// acknowledgement therefore marks the end of the first delivery's writes. One
+// event per unit also makes the replay independent of the 50 ms
 // delta-coalescing timer: every fixture step is exactly one committed unit.
 func (w *benchWorld) emit(event ports.ChatEvent) {
 	w.t.Helper()
 	w.events++
 	event.ProviderEventID = fmt.Sprintf("%s:%06d", w.fixture.ProviderConversationID, w.events)
+	w.deliver(event)
+	w.deliver(event)
+}
+
+func (w *benchWorld) deliver(event ports.ChatEvent) {
+	w.t.Helper()
 	select {
 	case w.conv.events <- event:
 	case <-time.After(benchStepTimeout):
@@ -592,19 +608,29 @@ func (w *benchWorld) measureLiveTurn(policy transferbench.ClientPolicy) benchRes
 	w.runTurn(turn, c.postMessage, func() { w.syncStep(c) })
 	c.closeStream()
 	c.metrics.CDCRows = w.latestSeq() - startSeq
+	// Every change row reaches the client as one frame, after the cursor frame.
+	if c.metrics.SSEFrames != c.metrics.CDCRows+1 {
+		w.t.Errorf("%d change rows produced %d frames; want rows + 1 cursor frame", c.metrics.CDCRows, c.metrics.SSEFrames)
+	}
 	history := w.fixture.HistoryTurnList()
 	return w.result("live-turn", c, c.view(), c.metrics, append(history, turn))
 }
 
 // syncStep publishes the step's change rows, lets the client read exactly
 // those frames, and applies the renderer's routing. Each committed step is
-// one refresh cycle: the scheduled-replay model in the docs.
+// one refresh cycle: the scheduled-replay model in the docs. A row written
+// after the step's barrier would make the replay timing-dependent, so it is
+// reported rather than silently attributed to whichever step saw it.
 func (w *benchWorld) syncStep(c *benchClient) {
 	w.t.Helper()
+	settled := w.latestSeq()
 	if err := w.poller.Poll(w.ctx); err != nil {
 		w.t.Fatal(err)
 	}
-	frames := c.readFramesThrough(w.latestSeq())
+	if published := w.poller.LastSeq(); published != settled {
+		w.t.Errorf("change rows %d..%d were written after the step barrier; the replay is not deterministic", settled+1, published)
+	}
+	frames := c.readFramesThrough(w.poller.LastSeq())
 	if c.routesToConversation(frames) {
 		c.refresh()
 	}
@@ -1739,6 +1765,10 @@ func (c *benchClient) openStream() {
 	}
 	go stream.read()
 	c.stream = stream
+	c.w.t.Cleanup(func() {
+		cancel()
+		_ = resp.Body.Close()
+	})
 	cursor := c.nextFrame()
 	if cursor.event != "cursor" {
 		c.w.t.Fatalf("event stream opened with %q, want the cursor frame", cursor.event)

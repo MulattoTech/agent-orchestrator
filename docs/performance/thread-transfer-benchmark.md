@@ -126,8 +126,12 @@ to 50 ms, and the renderer batches invalidations in a 150 ms window with one
 refresh in flight. Wall-clock coalescing would make counts vary run to run, so
 the benchmark fixes a schedule:
 
-- Each fixture step is one event and one projector unit. The harness waits for
-  the controller's acknowledgement, which happens only after the unit commits.
+- Each fixture step is one event and one projector unit. The controller
+  acknowledges an event before its after-commit work (activity reporting, turn
+  lifecycle), which can still write rows, so the harness then delivers the same
+  event again: the archive skips it as a replay and writes nothing, and its
+  acknowledgement can only arrive after the first delivery's unit has fully
+  returned. A row written after that barrier fails the run.
 - After each step the harness polls CDC once, the client reads exactly the
   frames up to the newest `change_log` sequence, applies the renderer's routing,
   and performs at most one refresh.
