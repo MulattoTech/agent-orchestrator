@@ -1,0 +1,245 @@
+{
+  "schemaVersion": "ao.transferbench.ceilings.v1",
+  "fixturesSha256": "6f1c93df044e19851ff93c45967464d8ee756a5eb349e2fb0b9294984a8d7c58",
+  "maxIncreasePermille": 20,
+  "rows": [
+    {
+      "provider": "claude",
+      "phase": "history-open",
+      "transport": "local",
+      "max": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 192,
+        "framingBytesIn": 64,
+        "bodyEncodedBytes": 213952,
+        "bodyDecodedBytes": 213952,
+        "wireBytesIn": 214144,
+        "wireBytesOut": 256
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "history-open",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 256,
+        "framingBytesIn": 64,
+        "bodyEncodedBytes": 4544,
+        "bodyDecodedBytes": 46912,
+        "wireBytesIn": 4800,
+        "wireBytesOut": 320
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "history-full",
+      "transport": "local",
+      "max": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 192,
+        "framingBytesIn": 64,
+        "bodyEncodedBytes": 213952,
+        "bodyDecodedBytes": 213952,
+        "wireBytesIn": 214144,
+        "wireBytesOut": 256
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "history-full",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 2,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 512,
+        "framingBytesIn": 128,
+        "bodyEncodedBytes": 13568,
+        "bodyDecodedBytes": 186048,
+        "wireBytesIn": 14144,
+        "wireBytesOut": 576
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "live-turn",
+      "transport": "local",
+      "max": {
+        "requests": 39,
+        "cdcRows": 44,
+        "sseFrames": 44,
+        "sseBytes": 15232,
+        "headerBytesIn": 7168,
+        "framingBytesIn": 896,
+        "bodyEncodedBytes": 8376640,
+        "bodyDecodedBytes": 8376640,
+        "wireBytesIn": 8399808,
+        "wireBytesOut": 8448
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "live-turn",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 41,
+        "cdcRows": 44,
+        "sseFrames": 44,
+        "sseBytes": 15232,
+        "headerBytesIn": 9408,
+        "framingBytesIn": 768,
+        "bodyEncodedBytes": 79552,
+        "bodyDecodedBytes": 365376,
+        "wireBytesIn": 104896,
+        "wireBytesOut": 12544
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "expand-output",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 20,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 4352,
+        "framingBytesIn": 0,
+        "bodyEncodedBytes": 18816,
+        "bodyDecodedBytes": 72960,
+        "wireBytesIn": 23168,
+        "wireBytesOut": 5952
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "history-open",
+      "transport": "local",
+      "max": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 192,
+        "framingBytesIn": 64,
+        "bodyEncodedBytes": 251776,
+        "bodyDecodedBytes": 251776,
+        "wireBytesIn": 251968,
+        "wireBytesOut": 256
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "history-open",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 256,
+        "framingBytesIn": 64,
+        "bodyEncodedBytes": 4288,
+        "bodyDecodedBytes": 39296,
+        "wireBytesIn": 4544,
+        "wireBytesOut": 320
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "history-full",
+      "transport": "local",
+      "max": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 192,
+        "framingBytesIn": 64,
+        "bodyEncodedBytes": 251776,
+        "bodyDecodedBytes": 251776,
+        "wireBytesIn": 251968,
+        "wireBytesOut": 256
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "history-full",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 3,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 704,
+        "framingBytesIn": 128,
+        "bodyEncodedBytes": 16000,
+        "bodyDecodedBytes": 184832,
+        "wireBytesIn": 16768,
+        "wireBytesOut": 896
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "live-turn",
+      "transport": "local",
+      "max": {
+        "requests": 46,
+        "cdcRows": 51,
+        "sseFrames": 51,
+        "sseBytes": 17664,
+        "headerBytesIn": 8384,
+        "framingBytesIn": 1088,
+        "bodyEncodedBytes": 11674176,
+        "bodyDecodedBytes": 11674176,
+        "wireBytesIn": 11701184,
+        "wireBytesOut": 9920
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "live-turn",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 48,
+        "cdcRows": 51,
+        "sseFrames": 51,
+        "sseBytes": 17664,
+        "headerBytesIn": 10880,
+        "framingBytesIn": 640,
+        "bodyEncodedBytes": 87104,
+        "bodyDecodedBytes": 349504,
+        "wireBytesIn": 116224,
+        "wireBytesOut": 14592
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "expand-output",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 60,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 13056,
+        "framingBytesIn": 0,
+        "bodyEncodedBytes": 54016,
+        "bodyDecodedBytes": 195328,
+        "wireBytesIn": 67072,
+        "wireBytesOut": 17728
+      }
+    }
+  ]
+}
