@@ -296,6 +296,17 @@ func TestVerifyExportBindsTheTreeToTheCommit(t *testing.T) {
 	if err := transferbench.VerifyExport(export, lsTree, overlay); err == nil {
 		t.Fatal("a missing file passed")
 	}
+	// A symlink to the right bytes outside the tree is still not the commit.
+	outside := filepath.Join(t.TempDir(), "events.go")
+	if err := os.WriteFile(outside, []byte(product), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(export, "backend/internal/httpd/events.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := transferbench.VerifyExport(export, lsTree, overlay); err == nil {
+		t.Fatal("a symlinked product file passed")
+	}
 }
 
 func hasReason(report transferbench.Report, code, metric string) bool {

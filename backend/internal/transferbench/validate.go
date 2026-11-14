@@ -11,7 +11,7 @@ var (
 	hex32Pattern     = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	hex40Pattern     = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	hex64Pattern     = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	goVersionPattern = regexp.MustCompile(`^go1\.[0-9]{1,3}(\.[0-9]{1,3})?((rc|beta)[0-9]{1,2})?$`)
+	goVersionPattern = regexp.MustCompile(`^go1\.\d{1,3}(\.\d{1,3})?((rc|beta)\d{1,2})?$`)
 	platformPattern  = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
 )
 

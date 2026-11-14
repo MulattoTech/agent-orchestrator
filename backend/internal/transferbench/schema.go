@@ -156,7 +156,10 @@ type CeilingRow struct {
 // ScenarioKey identifies a scenario across runs and ceilings.
 type ScenarioKey struct{ Provider, Phase, Transport string }
 
-func (s Scenario) Key() ScenarioKey   { return ScenarioKey{s.Provider, s.Phase, s.Transport} }
+// Key identifies the scenario a run measured.
+func (s Scenario) Key() ScenarioKey { return ScenarioKey{s.Provider, s.Phase, s.Transport} }
+
+// Key identifies the scenario a ceiling row budgets.
 func (c CeilingRow) Key() ScenarioKey { return ScenarioKey{c.Provider, c.Phase, c.Transport} }
 
 func (k ScenarioKey) String() string { return k.Provider + "/" + k.Phase + "/" + k.Transport }

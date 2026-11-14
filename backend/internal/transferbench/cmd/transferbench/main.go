@@ -29,7 +29,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: transferbench compare|validate|overlay|verify-export [flags]")
+		note(stderr, "usage: transferbench compare|validate|overlay|verify-export [flags]")
 		return transferbench.ExitIncomparable
 	}
 	switch args[0] {
@@ -42,7 +42,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "verify-export":
 		return verifyExport(args[1:], stdout, stderr)
 	}
-	fmt.Fprintf(stderr, "unknown command %q\n", args[0])
+	note(stderr, "unknown command %q", args[0])
 	return transferbench.ExitIncomparable
 }
 
@@ -58,7 +58,7 @@ func compare(args []string, stdout, stderr io.Writer) int {
 	outJSON := fs.String("out-json", "", "write the report JSON here")
 	outMD := fs.String("out-md", "", "write the Markdown report here")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *baselinePath == "" || *candidatePath == "" || *ceilingsPath == "" {
-		fmt.Fprintln(stderr, "compare needs --baseline, --candidate and --ceilings")
+		note(stderr, "compare needs --baseline, --candidate and --ceilings")
 		return transferbench.ExitIncomparable
 	}
 	ceilingsBytes, err := transferbench.ReadArtifact(*ceilingsPath)
@@ -87,18 +87,17 @@ func compare(args []string, stdout, stderr io.Writer) int {
 	if *outJSON != "" {
 		data, err := json.MarshalIndent(report, "", "  ")
 		if err != nil || os.WriteFile(*outJSON, append(data, '\n'), 0o644) != nil { //nolint:gosec // report output.
-			fmt.Fprintln(stderr, "could not write the JSON report")
+			note(stderr, "could not write the JSON report")
 			return transferbench.ExitIncomparable
 		}
 	}
 	if *outMD != "" {
 		if err := os.WriteFile(*outMD, []byte(markdown), 0o644); err != nil { //nolint:gosec // report output.
-			fmt.Fprintln(stderr, "could not write the Markdown report")
+			note(stderr, "could not write the Markdown report")
 			return transferbench.ExitIncomparable
 		}
 	}
-	fmt.Fprint(stdout, markdown)
-	return report.ExitCode
+	return emit(stdout, stderr, report.ExitCode, markdown)
 }
 
 func loadRun(path string) (transferbench.Run, error) {
@@ -110,7 +109,7 @@ func loadRun(path string) (transferbench.Run, error) {
 }
 
 func rejected(stderr io.Writer, what string, err error) int {
-	fmt.Fprintf(stderr, "rejected %s: %v\n", what, err)
+	note(stderr, "rejected %s: %v", what, err)
 	return transferbench.ExitIncomparable
 }
 
@@ -119,14 +118,13 @@ func validate(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	runPath := fs.String("run", "", "run JSON")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *runPath == "" {
-		fmt.Fprintln(stderr, "validate needs --run")
+		note(stderr, "validate needs --run")
 		return transferbench.ExitIncomparable
 	}
 	if _, err := loadRun(*runPath); err != nil {
 		return rejected(stderr, "run", err)
 	}
-	fmt.Fprintln(stdout, "valid")
-	return transferbench.ExitPass
+	return emit(stdout, stderr, transferbench.ExitPass, "valid\n")
 }
 
 func overlay(args []string, stdout, stderr io.Writer) int {
@@ -136,21 +134,20 @@ func overlay(args []string, stdout, stderr io.Writer) int {
 	baselineRoot := fs.String("baseline-root", "", "exported baseline tree")
 	manifest := fs.String("manifest", "", "write the overlay manifest here")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *candidateRoot == "" || *baselineRoot == "" || *manifest == "" {
-		fmt.Fprintln(stderr, "overlay needs --candidate-root, --baseline-root and --manifest")
+		note(stderr, "overlay needs --candidate-root, --baseline-root and --manifest")
 		return transferbench.ExitIncomparable
 	}
 	entries, err := transferbench.Overlay(*candidateRoot, *baselineRoot)
 	if err != nil {
-		fmt.Fprintf(stderr, "overlay refused: %v\n", err)
+		note(stderr, "overlay refused: %v", err)
 		return transferbench.ExitIncomparable
 	}
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil || os.WriteFile(*manifest, append(data, '\n'), 0o644) != nil { //nolint:gosec // manifest output.
-		fmt.Fprintln(stderr, "could not write the overlay manifest")
+		note(stderr, "could not write the overlay manifest")
 		return transferbench.ExitIncomparable
 	}
-	fmt.Fprintf(stdout, "overlaid %d harness files\n", len(entries))
-	return transferbench.ExitPass
+	return emit(stdout, stderr, transferbench.ExitPass, fmt.Sprintf("overlaid %d harness files\n", len(entries)))
 }
 
 func verifyExport(args []string, stdout, stderr io.Writer) int {
@@ -160,7 +157,7 @@ func verifyExport(args []string, stdout, stderr io.Writer) int {
 	lsTreePath := fs.String("ls-tree", "", "output of git ls-tree -r -z --full-tree <commit> -- <paths>")
 	manifest := fs.String("manifest", "", "overlay manifest")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *exportRoot == "" || *lsTreePath == "" || *manifest == "" {
-		fmt.Fprintln(stderr, "verify-export needs --export-root, --ls-tree and --manifest")
+		note(stderr, "verify-export needs --export-root, --ls-tree and --manifest")
 		return transferbench.ExitIncomparable
 	}
 	lsTree, err := os.ReadFile(*lsTreePath)
@@ -176,9 +173,24 @@ func verifyExport(args []string, stdout, stderr io.Writer) int {
 		return rejected(stderr, "overlay manifest", errors.New("unreadable"))
 	}
 	if err := transferbench.VerifyExport(*exportRoot, lsTree, entries); err != nil {
-		fmt.Fprintf(stderr, "baseline tree verification failed: %v\n", err)
+		note(stderr, "baseline tree verification failed: %v", err)
 		return transferbench.ExitIncomparable
 	}
-	fmt.Fprintln(stdout, "baseline tree matches the commit plus the overlay")
-	return transferbench.ExitPass
+	return emit(stdout, stderr, transferbench.ExitPass, "baseline tree matches the commit plus the overlay\n")
+}
+
+// note writes a diagnostic to stderr. A diagnostic that cannot be written has
+// nowhere else to go, so its error is dropped.
+func note(stderr io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(stderr, format+"\n", args...)
+}
+
+// emit writes a command's result to stdout and returns code. A result that
+// cannot be delivered fails the command instead of passing silently.
+func emit(stdout, stderr io.Writer, code int, text string) int {
+	if _, err := io.WriteString(stdout, text); err != nil {
+		note(stderr, "could not write the result: %v", err)
+		return transferbench.ExitIncomparable
+	}
+	return code
 }

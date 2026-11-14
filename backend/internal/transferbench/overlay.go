@@ -157,7 +157,7 @@ func Overlay(candidateRoot, baselineRoot string) ([]OverlayEntry, error) {
 			if SHA256Hex(data) != file.Sha256 {
 				return nil, fmt.Errorf("candidate %s changed while it was copied", file.Path)
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 				return nil, err
 			}
 			if err := os.WriteFile(target, data, 0o644); err != nil { //nolint:gosec // test sources in a private scratch tree.
@@ -212,23 +212,26 @@ func VerifyExport(exportRoot string, lsTree []byte, overlay []OverlayEntry) erro
 			added[entry.Path] = entry.Sha256
 		}
 	}
+	// Walk and read through a root so no path can leave the export, even if
+	// the tree changes during the walk.
+	root, err := os.OpenRoot(exportRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	tree := root.FS()
 	found := map[string]bool{}
-	err := filepath.WalkDir(exportRoot, func(p string, entry fs.DirEntry, err error) error {
+	err = fs.WalkDir(tree, ".", func(rel string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
 			return nil
 		}
-		rel, err := filepath.Rel(exportRoot, p)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("%s is not a regular file", rel)
 		}
-		data, err := os.ReadFile(p)
+		data, err := fs.ReadFile(tree, rel)
 		if err != nil {
 			return err
 		}

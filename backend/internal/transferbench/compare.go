@@ -187,7 +187,7 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 	if baseline.ClientPolicy != candidate.ClientPolicy {
 		add("client-policy-changed", SeverityInfo, ScenarioKey{}, "")
 	}
-	comparable := !hasSeverity(report.Reasons, SeverityIncomparable)
+	runsComparable := !hasSeverity(report.Reasons, SeverityIncomparable)
 
 	baseRows := scenarioMap(baseline.Scenarios)
 	candRows := scenarioMap(candidate.Scenarios)
@@ -212,7 +212,7 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 			continue
 		}
 		row := ReportRow{Provider: key.Provider, Phase: key.Phase, Transport: key.Transport, Status: StatusPass}
-		rowComparable := comparable
+		rowComparable := runsComparable
 		if base.State.ExpectedDigest != cand.State.ExpectedDigest {
 			add("expected-state-mismatch", SeverityIncomparable, key, "")
 			rowComparable = false
@@ -261,11 +261,11 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 // judgeMetric applies the absolute ceiling always and the relative cap only
 // when the pair is comparable. Integer arithmetic only: values are bounded by
 // MaxMetric, so the products cannot overflow.
-func judgeMetric(name string, base, cand, ceiling, permille int64, comparable bool) MetricRow {
+func judgeMetric(name string, base, cand, ceiling, permille int64, pairComparable bool) MetricRow {
 	metric := MetricRow{Name: name, Baseline: base, Candidate: cand, Ceiling: ceiling, Allowed: ceiling, Delta: cand - base}
 	over := cand > ceiling
 	regressed := false
-	if comparable && base > 0 {
+	if pairComparable && base > 0 {
 		metric.RelativeAvailable = true
 		metric.DeltaPermille = (cand - base) * 1000 / base
 		allowed := base + base*permille/1000
@@ -273,9 +273,9 @@ func judgeMetric(name string, base, cand, ceiling, permille int64, comparable bo
 		regressed = cand > allowed
 	}
 	switch {
-	case comparable && base == 0 && cand == 0:
+	case pairComparable && base == 0 && cand == 0:
 		metric.Status = MetricNotApplicable
-	case comparable && base == 0 && cand > 0:
+	case pairComparable && base == 0 && cand > 0:
 		metric.Status = MetricFromZero
 	case over && regressed:
 		metric.Status = MetricOverBoth
