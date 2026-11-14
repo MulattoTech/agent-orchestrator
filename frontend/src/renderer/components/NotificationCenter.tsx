@@ -121,8 +121,6 @@ function useSessionTerminationLookup(
 		}
 		return ids;
 	}, [workspaces]);
-	// Only successful workspace data is trustworthy. Pending and error both leave
-	// sessions non-navigable — a failed query must not treat terminated rows as live.
 	return {
 		retryWorkspace: refetch,
 		sessionsReady: isSuccess,
@@ -131,11 +129,6 @@ function useSessionTerminationLookup(
 	};
 }
 
-/**
- * Radix only mounts PopoverContent while the bell is open. Keeping the broad
- * workspace observer here means streamed workspace activity cannot wake the
- * always-mounted bell while its panel is closed.
- */
 function NotificationWorkspaceState({
 	children,
 }: {
@@ -193,17 +186,13 @@ export function NotificationRuntime() {
 	const navigateToSession = useNavigateToSession();
 	const unreadQuery = useNotificationsQuery("unread");
 	const remoteUnread = useRemoteNotificationHosts("unread");
-	// CloudNotificationRuntime keeps the Cloud list live; this only reads it,
-	// so Cloud rows reach the badge and the OS as local ones do.
 	const cloudAll = useCloudNotifications("all", { live: false });
 	const cloudItems = cloudAll.items ?? EMPTY_CLOUD_NOTIFICATIONS;
 	const cloudItemsRef = useRef(cloudItems);
 	cloudItemsRef.current = cloudItems;
 	const { userId: cloudUserId } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
-	// Whose Cloud inbox is loaded; a new account or organization is a new inbox.
 	const cloudScope = cloudAll.data ? `${cloudUserId}:${cloudOrg?.id ?? ""}` : undefined;
-	// The same count as the bell's.
 	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
 	const routeRef = useRef(params);
@@ -213,11 +202,6 @@ export function NotificationRuntime() {
 	const seenCloudIds = useRef<{ scope: string; ids: Set<string> } | undefined>(undefined);
 	const shownCloudNotifications = useRef(new Map<string, CloudCpNotification>());
 
-	// Being on the session route is not the same as watching the agent: its pane
-	// renders one terminal at a time, so a shell or reviewer tab hides the agent
-	// while the route is unchanged. Only report the session whose agent terminal
-	// is the one on screen. Read the store imperatively — this feeds a getter for
-	// the long-lived SSE connection, which needs the current value, not a render.
 	const getVisibleAgentSessionId = useCallback(() => {
 		const { hostId, sessionId } = routeRef.current;
 		if (!sessionId || hostId) return undefined;
@@ -230,8 +214,6 @@ export function NotificationRuntime() {
 	);
 	useEffect(() => connectRemoteNotificationStreams(queryClient), [queryClient]);
 
-	// Keep the OS launcher badge in sync in the persistent shell runtime;
-	// topbar controls can remount as the visible page changes.
 	useEffect(() => {
 		void aoBridge.notifications.setBadge(unreadCount);
 	}, [unreadCount]);
@@ -243,7 +225,7 @@ export function NotificationRuntime() {
 			const previousIds = seenRemoteIds.current.get(host.hostId);
 			if (!previousIds) {
 				seenRemoteIds.current.set(host.hostId, currentIds);
-				continue; // Reconnecting to a host must not replay its existing inbox.
+				continue;
 			}
 			for (const notification of host.data.notifications) {
 				if (previousIds.has(notification.id)) continue;
@@ -272,9 +254,6 @@ export function NotificationRuntime() {
 		}
 	}, [remoteUnread.hosts]);
 
-	// A Cloud row that arrives while the list is loaded raises an OS
-	// notification, as a local one does; the list as first loaded (or after
-	// the account or organization changes it wholesale) is not replayed.
 	useEffect(() => {
 		if (cloudScope === undefined) return;
 		if (seenCloudIds.current?.scope !== cloudScope) {
@@ -326,7 +305,7 @@ export function NotificationRuntime() {
 					const all = queryClient.getQueryData<NotificationsPage>(remoteNotificationsQueryKey(host, "all"));
 					const notification = shownRemoteNotifications.current.get(id) ?? [...(unread?.notifications ?? []), ...(all?.notifications ?? [])].find((item) => item.id === notificationId);
 					if (notification) openPrimary(notification, host);
-				} catch { /* Ignore malformed or obsolete OS notification IDs. */ }
+				} catch { }
 				return;
 			}
 			const unread = queryClient.getQueryData<NotificationsCache>(unreadNotificationsQueryKey);
@@ -346,12 +325,8 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const queryClient = useQueryClient();
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [markReadError, setMarkReadError] = useState<string | null>(null);
-	// Bumped by the mark-read Retry control so a failed ack can run again even
-	// when visibleUnreadKey is unchanged (removing ids from the ref alone does not).
 	const [ackRetryNonce, setAckRetryNonce] = useState(0);
 	const [open, setOpen] = useState(false);
-	// Opening marks unread as read, which would drop the highlight under the
-	// cursor. Keep the open-time unread ids highlighted until the panel closes.
 	const [highlightedIds, setHighlightedIds] = useState<Set<string>>(() => new Set());
 	const [clearingNotificationIds, setClearingNotificationIds] = useState<Set<string>>(() => new Set());
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
@@ -365,8 +340,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const allQuery = useNotificationsQuery("all", open);
 	const remoteUnread = useRemoteNotificationHosts("unread");
 	const remoteAll = useRemoteNotificationHosts("all", open);
-	// CloudNotificationRuntime keeps this list live; the panel only reads it.
-	// Its response also carries the server's total unread count for the badge.
 	const cloudAll = useCloudNotifications("all", { live: false });
 	const cloudItems = cloudAll.items ?? [];
 	const markAllRead = useMarkAllNotificationsReadMutation();
@@ -394,13 +367,11 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			remoteFirstPageKeys.current.set(host.hostId, key);
 			if (previous === undefined || previous === key) continue;
 			if (!(remoteOlderPages[host.hostId]?.length) && remoteLoadingEarlierHost !== host.hostId) continue;
-			// Cursor pagination shifts when the first page changes; reload older pages from its new boundary.
 			remoteHistoryGeneration.current += 1;
 			setRemoteOlderPages((current) => ({ ...current, [host.hostId]: [] }));
 			setRemoteLoadingEarlierHost(null);
 		}
 	}, [remoteAll.hosts, remoteLoadingEarlierHost, remoteOlderPages]);
-	// Hold older Cloud rows until the local pagination window reaches them.
 	const localHasMore = Boolean(allQuery.hasNextPage);
 	const visibleCloudItems = useMemo(() => {
 		if (!localHasMore) return cloudItems;
@@ -422,8 +393,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const navigateToSession = useNavigateToSession();
 	const markAllMutate = markAllRead.mutateAsync;
 
-	// Concrete ids only — never `[]` — so unread pages past the first stay
-	// reachable and arrive as unread (still highlighted) when the all-list loads them.
 	const acknowledgedIdsRef = useRef<Set<string>>(new Set());
 	const acknowledgedRemoteIdsRef = useRef<Set<string>>(new Set());
 	const remoteHostsRef = useRef(remoteItems);
@@ -444,8 +413,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	}, [notifications, unreadQuery.data]);
 	const visibleUnreadKey = visibleUnreadIds.join("|");
 
-	// Opening the panel acknowledges what has actually been loaded. Later unread
-	// rows are acknowledged as they appear, keeping the unread pagination cursor.
 	useEffect(() => {
 		if (!open) {
 			setHighlightedIds(new Set());
@@ -510,8 +477,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		}
 	}, [ackRetryNonce, open, queryClient, t, visibleRemoteUnreadKey]);
 
-	// Cloud rows are acknowledged the same way: concrete loaded ids only, so a
-	// row that arrives mid-refresh is highlighted before it is marked read.
 	const openRef = useRef(open);
 	openRef.current = open;
 	const acknowledgedCloudIdsRef = useRef<Set<string>>(new Set());
@@ -560,8 +525,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		}
 	}, [queryClient]);
 
-	// A fullscreen pane mounts its own bell and covers the panel's; only the bell
-	// the user can see answers the menu.
 	const anchorRef = useRef<HTMLSpanElement>(null);
 	useAppMenuAvailable("toggle-notifications", true);
 	useAppMenuAction("toggle-notifications", () => {
@@ -610,8 +573,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		void restoreThenOpen(sessionId, hostId, sessionUiKey(sessionId, hostId), () => openSession(notification, hostId));
 	}, [openSession, restoreThenOpen]);
 
-	// Cloud sessions live in the same workspace tree as local ones, keyed by
-	// their cloud project, so they open through the same session route.
 	const openCloudSession = useCallback((projectId: string, sessionId: string) => {
 		recordManualWorkerOpen(sessionId);
 		void captureRendererEvent("ao.notifications.opened", { target: "session" });
@@ -629,8 +590,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 	const clearCloud = cloudAll.clearAll;
 	const clearCloudOne = cloudAll.clearOne;
-	// Clear local history unless it is confirmed empty. A failed local load still
-	// clears server-side: the daemon's clear-all does not need rows loaded.
 	const clearLocal = notifications.length > 0 || !allQuery.isSuccess;
 	const handleClearAll = useCallback(() => {
 		if (clearingAll) return;
@@ -655,7 +614,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		}).finally(() => setClearingAll(false));
 	}, [clearAll, clearCloud, clearLocal, clearingAll, queryClient, remoteAll.hosts, t]);
 
-	/** Resolves to whether the notification was cleared. */
 	const handleClear = useCallback((notification: NotificationDTO, hostId: HostId): Promise<boolean> => {
 		setActionError(null);
 		const key = notificationKey(hostId, notification.id);
@@ -684,7 +642,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			});
 	}, [clearOne, queryClient, t]);
 
-	/** Resolves to whether the notification was cleared. */
 	const handleClearCloud = useCallback((notification: CloudCpNotification): Promise<boolean> => {
 		const clearingId = cloudRowKey(notification.id);
 		setActionError(null);
@@ -727,15 +684,11 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			if (generation === remoteHistoryGeneration.current) setRemoteLoadingEarlierHost(null);
 		}
 	};
-	// Local history only loads once the panel opens, while cloud rows are cached
-	// in the background. Hold the list until local arrives so rows don't pop in,
-	// and keep a local load failure visible even when cloud rows exist.
 	const localEmpty = notifications.length === 0;
 	const localLoadFailed = allQuery.isError && localEmpty && !confirmedClearSnapshot;
 	const localLoading = allQuery.isLoading && localEmpty;
 	const remoteLoadFailed = remoteAll.hosts.some((host) => host.isError);
 	const remoteLoading = remoteAll.hosts.some((host) => host.isLoading);
-	// Local, remote, and Cloud rows interleave by creation time.
 	const rows = useMemo(() => {
 		const merged = [
 			...entries.map((entry) => ({ kind: "host" as const, ...entry })),
@@ -747,7 +700,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 	return (
 		<Popover onOpenChange={setPanelOpen} open={open}>
-			{/* Keep the drawer anchored to layout bounds while the bell scales on press. */}
 			<PopoverAnchor asChild>
 				<span className="inline-flex shrink-0" ref={anchorRef}>
 					<PopoverTrigger asChild>
@@ -911,11 +863,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							const meta = sessionKey ? sessionMeta.get(sessionKey) : undefined;
 							const terminated = Boolean(sessionKey) && terminatedIds.has(sessionKey ?? "");
 							const key = notificationKey(hostId, notification.id);
-							// Restoring only makes sense when an agent is actually paused waiting
-							// on input. PR outcomes (ready_to_merge, pr_merged, pr_closed_unmerged)
-							// describe work that already finished — there is nothing to resume, so
-							// a terminated session behind one of these should stay viewable, not
-							// gated behind a restore action.
 							const offerRestore = sessionReady && terminated && notification.type === "needs_input";
 							return (
 								<NotificationItem
@@ -1002,14 +949,6 @@ function NotificationEmpty({ icon: Icon, message }: { icon: typeof Bell; message
 	);
 }
 
-/**
- * The whole row is the click target for live sessions. A terminated session
- * behind a `needs_input` notification is not navigable — restore is the only
- * action, since there is a paused agent to resume. PR-outcome notifications
- * (`offerRestore` false) describe finished work, so a terminated session stays
- * viewable there instead of being gated behind restore. PR titles stay a real
- * link so a PR row can open the PR without a separate icon button.
- */
 const NotificationItem = memo(function NotificationItem({
 	highlighted,
 	notification,
@@ -1074,7 +1013,6 @@ const NotificationItem = memo(function NotificationItem({
 				}}
 				role={canOpenSession ? "button" : undefined}
 				tabIndex={canOpenSession ? 0 : undefined}
-				// Row actions set title="" so this native tooltip does not show over them.
 				title={canOpenSession ? t("notify.openSessionTitle") : undefined}
 			>
 				<div
@@ -1196,11 +1134,6 @@ const NotificationItem = memo(function NotificationItem({
 
 const cloudRowKey = (id: string) => `cloud:${id}`;
 
-/**
- * Cloud rows mirror NotificationItem exactly (open, restore, clear, meta line,
- * motion), plus a small "Cloud" tag. A cloud row opens only once its session is
- * in the workspace tree; otherwise the route would have nothing to render.
- */
 const CloudNotificationItem = memo(function CloudNotificationItem({
 	highlighted,
 	notification,
@@ -1263,7 +1196,6 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 				}}
 				role={canOpenSession ? "button" : undefined}
 				tabIndex={canOpenSession ? 0 : undefined}
-				// Row actions set title="" so this native tooltip does not show over them.
 				title={canOpenSession ? t("notify.openSessionTitle") : undefined}
 			>
 				<div
@@ -1443,7 +1375,6 @@ function notificationIcon(type: string) {
 	}
 }
 
-// Match the semantic status colors used by the board and inspector.
 function notificationIconClass(type: string): string {
 	switch (type) {
 		case "needs_input":

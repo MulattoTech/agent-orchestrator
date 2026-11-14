@@ -46,15 +46,8 @@ type notificationSink interface {
 	Resolve(context.Context, ports.NotificationResolution) error
 }
 
-// lifecycleStack owns the runtime reaper goroutine started with the lifecycle
-// reducer. The reducer itself is only used for wiring observations into storage.
 type lifecycleStack struct {
-	// LCM is the Lifecycle Manager (the canonical write path). It is exposed so
-	// startSession can share the same reducer the reaper drives, rather than
-	// standing up a second store+LCM pair that would diverge under writes.
-	LCM *lifecycle.Manager
-	// ArtifactVersions is the one artifact version capturer. The session
-	// service deletes artifacts through it so a delete holds the capture lock.
+	LCM              *lifecycle.Manager
 	ArtifactVersions *artifactversions.Capturer
 	runtimeReaper    *reaper.Reaper
 	reaperStart      chan struct{}
@@ -70,16 +63,10 @@ type lifecycleStack struct {
 	automationDone   <-chan struct{}
 }
 
-// startLifecycle constructs the Lifecycle Manager over the store and starts the
-// reaper. The goroutine stops when ctx is cancelled; Stop waits for it to drain.
-// The messenger is the per-daemon agent messenger the LCM uses to nudge agents
-// in response to SCM observations (CI failure, review feedback, merge conflict).
 func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger) *lifecycleStack {
 	lcm := lifecycle.New(store, messenger,
 		lifecycle.WithNotificationSink(notifier),
 		lifecycle.WithTelemetry(telemetry),
-		// One delivery recorder for every owner of a session end; services
-		// reach it through lcm.DeliveryTelemetry().
 		lifecycle.WithDeliveryTelemetry(deliverytelemetry.New(telemetry, store)),
 		lifecycle.WithContainerReaper(dockerreap.New(), store),
 		lifecycle.WithActiveSteering(activeTurnSteering(agents)),
@@ -93,8 +80,6 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{Logger: logger})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
-		// fx treats reporting as best effort; an occupied or unavailable socket
-		// must not prevent the daemon or ordinary agent sessions from starting.
 		logger.Warn("fx Herdr listener unavailable", "error", err)
 	}
 	artifactVersions := artifactversions.New(store, dataDir, logger)
@@ -112,9 +97,6 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	}
 }
 
-// startupSignalGatesInput resolves whether an adapter promises that its first
-// hook proves native TUI startup dialogs have cleared. Unknown and hookless
-// adapters remain ungated.
 func startupSignalGatesInput(agents ports.AgentResolver) func(domain.AgentHarness) bool {
 	return func(harness domain.AgentHarness) bool {
 		if agents == nil {
@@ -129,13 +111,6 @@ func startupSignalGatesInput(agents ports.AgentResolver) func(domain.AgentHarnes
 	}
 }
 
-// urgentNudgeWaitingInputSafe resolves whether an adapter reports a permission
-// dialog AS blocked (ports.BlockedActivitySignaler) rather than as
-// waiting_input. Only then is an urgent merge-conflict nudge safe to paste at a
-// waiting_input prompt — a harness like codex, which maps permission-request to
-// waiting_input and opts out of the signal, must not receive that unsolicited
-// write while it could be sitting on a masked decision. Unknown and opted-out
-// adapters answer false, so lifecycle withholds the urgent nudge there.
 func urgentNudgeWaitingInputSafe(agents ports.AgentResolver) func(domain.AgentHarness) bool {
 	return func(harness domain.AgentHarness) bool {
 		if agents == nil {
@@ -150,26 +125,14 @@ func urgentNudgeWaitingInputSafe(agents ports.AgentResolver) func(domain.AgentHa
 	}
 }
 
-// ReconcileRuntime runs the same conservative runtime/workload observation as
-// the periodic reaper. The daemon calls it after session-manager reconciliation
-// so exits missed while AO was stopped are folded after the startup check has
-// kept those sessions stopped and resumable. The periodic loop starts after it.
 func (l *lifecycleStack) ReconcileRuntime(ctx context.Context) error {
 	return l.runtimeReaper.Tick(ctx)
 }
 
-// StartReaperLoop lets the periodic reaper run. The boot goroutine defers it,
-// so it runs after ReconcileRuntime, and a panic before that pass cannot leave
-// the reaper off for good.
 func (l *lifecycleStack) StartReaperLoop() {
 	l.reaperStartOnce.Do(func() { close(l.reaperStart) })
 }
 
-// activeTurnSteering resolves the per-harness active-turn steering capability
-// from the agent adapters, so lifecycle policy consumes an adapter-declared
-// capability instead of knowing harness-specific terminal semantics. An
-// unresolvable harness, or one whose adapter does not declare the capability,
-// answers false.
 func activeTurnSteering(agents ports.AgentResolver) func(domain.AgentHarness) bool {
 	return func(harness domain.AgentHarness) bool {
 		if agents == nil {
@@ -184,8 +147,6 @@ func activeTurnSteering(agents ports.AgentResolver) func(domain.AgentHarness) bo
 	}
 }
 
-// Stop waits for the reaper goroutine to exit. The caller must cancel the ctx
-// passed to startLifecycle before calling Stop.
 func (l *lifecycleStack) Stop() {
 	if l.herdr != nil {
 		l.herdr.Stop()
@@ -214,22 +175,12 @@ func (l *lifecycleStack) Stop() {
 	}
 }
 
-// sessionLifecycle is the narrow surface of sessionmanager.Manager used for
-// boot/shutdown wiring. A minimal interface keeps the daemon testable without
-// depending on the concrete manager type.
-//
-// SaveAndTeardownAll is deliberately ABSENT from this interface so the daemon
-// cannot remove worktrees on shutdown. Explicit desktop quit may stop agent
-// processes; ordinary daemon replacement still preserves them for adoption.
 type sessionLifecycle interface {
 	Reconcile(ctx context.Context) error
 	ReconcileStartupSafety(ctx context.Context) error
 	ReconnectAwakeAgent(ctx context.Context, target domain.AwakeAgentTarget) error
 	ReconcileBackground(ctx context.Context) error
 	HibernateIdleChats(ctx context.Context) error
-	// ReconcileWorkspaceCleanup finishes interrupted workspace cleanups and
-	// records sessions with nothing left on disk; it never deletes a worktree
-	// the user has not asked to remove.
 	ReconcileWorkspaceCleanup(ctx context.Context) error
 	RefreshStaleChats(ctx context.Context, minIdle time.Duration) error
 	RefreshStaleTerminals(ctx context.Context, minIdle time.Duration) error
@@ -249,39 +200,16 @@ type sessionLifecycle interface {
 	StopAgentsForQuit(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
-	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
-	// scoped shell terminals before its worktree is torn down. shellterm.Service
-	// is built after Session Manager during boot (see startShellTerminals), so
-	// this cannot be a constructor argument.
 	SetShellTerminalCloser(closer sessionmanager.ShellTerminalCloser)
-	// AcquireSessionInput holds direct terminal writes across the actual pane
-	// write while ownership may move between provider processes.
 	AcquireSessionInput(id domain.SessionID) (release func(), ok bool)
-	// SessionMutationInProgress suppresses observation-driven termination while
-	// Session Manager deliberately replaces or relaunches a provider process.
 	SessionMutationInProgress(id domain.SessionID) bool
-	// SetTerminalInputGate prevents mux input from racing a TUI-to-Chat handoff.
 	SetTerminalInputGate(gate sessionmanager.TerminalInputGate)
-	// SetReviewerTerminator late-binds worker lifecycle teardown to the review
-	// service, which is built alongside the controller-facing service below.
 	SetReviewerTerminator(terminator sessionmanager.ReviewerTerminator)
-	// SetHarnessUseGate prevents lifecycle operations from racing a harness
-	// executable replacement.
 	SetHarnessUseGate(gate sessionmanager.HarnessUseGate)
-	// SetImportArchiveRefresher rereads an imported conversation before its
-	// first open, using the same import service the REST surface serves.
 	SetImportArchiveRefresher(refresher sessionmanager.ImportArchiveRefresher)
-	// PersistChatModel records the model the user picked in ChatUI onto the
-	// session's durable metadata before the next prompt routes. A later TUI
-	// rebuild reads it back so ChatUI model changes survive the handoff.
 	PersistChatModel(ctx context.Context, id domain.SessionID, model string) error
 }
 
-// sessionLifecycleMessenger adapts sessionLifecycle to ports.AgentMessenger so
-// the fully-wired manager can replace the boot-time pane messenger once ready.
-// None of the daemon-internal sends this feeds (interface-transition drains,
-// lifecycle nudges) carry an attachment, so it is always nil here; the
-// attachment-aware send path only exists at the HTTP /send endpoint.
 type sessionLifecycleMessenger struct {
 	sessionLifecycle
 }
@@ -290,12 +218,6 @@ func (m sessionLifecycleMessenger) Send(ctx context.Context, id domain.SessionID
 	return m.sessionLifecycle.Send(ctx, id, message, nil)
 }
 
-// telemetryEmitsSpawned reports whether the ao.sessions.spawned carrier event can
-// reach a sink under this config: product telemetry on and the event not on the
-// kill switch. When it cannot, session wiring leaves the GitHub identity resolver
-// nil so a spawn never makes a GitHub call whose only purpose is a dropped event.
-// This mirrors newTelemetrySink, which returns a NoopSink under the same off
-// condition, so the non-nil NoopSink never reaches an unnecessary resolve.
 func telemetryEmitsSpawned(cfg config.Config) bool {
 	if !cfg.Telemetry.Events {
 		return false
@@ -303,22 +225,9 @@ func telemetryEmitsSpawned(cfg config.Config) bool {
 	return !telemetryadapter.EventDenied(cfg.Telemetry.DisabledEvents, "ao.sessions.spawned")
 }
 
-// startSession builds the controller-facing session service: a session manager
-// over the selected runtime, routed git/scratch workspaces, the shared store +
-// LCM, the per-session agent resolver, and the agent messenger. The tracker is
-// built once by the caller (Run) and shared with the intake observer; it may
-// be nil (no usable credentials) — the service's nil-guard handles that
-// (issue #2685). The returned service is mounted at httpd APIDeps.Sessions.
-// It also returns the manager so the caller can wire Reconcile into the boot
-// sequence.
 func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, artifactVersions *artifactversions.Capturer, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, reviewerRecoveryDone <-chan struct{}, defaults sessionmanager.SessionModeDefaults, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, reviewers *reviewer.Resolver, reviewRefresher reviewsvc.ThreadRefresher, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
 	gitWS, err := gitworktree.New(gitworktree.Options{
-		// Per-session worktrees live under the data dir, so a single AO_DATA_DIR
-		// override moves all durable per-user state together.
-		ManagedRoot: filepath.Join(cfg.DataDir, "worktrees"),
-		// Resolve each project's source repo from the projects table, so a
-		// session spawned for a registered project materialises its worktree off
-		// that repo. Unregistered projects fail loudly.
+		ManagedRoot:  filepath.Join(cfg.DataDir, "worktrees"),
 		RepoResolver: projectRepoResolver{store: store},
 		Logger:       log,
 	})
@@ -359,45 +268,34 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	})
 	mgr.SetAgentReadiness(agentReadiness)
 	scmProvider := newMultiSCMProvider(cfg.GitLab, log)
-	// Attach the operator's GitHub login to product telemetry only when its carrier
-	// event can actually be sent, and guard the typed nil from newMultiSCMProvider
-	// so the interface stays nil (degrading to anonymous) rather than wrapping a
-	// nil pointer.
 	var githubIdentity ports.ScopedIdentityResolver
 	if scmProvider != nil && telemetryEmitsSpawned(cfg) {
 		githubIdentity = scmProvider
 	}
 	deps := sessionsvc.Deps{
-		Manager:           mgr,
-		Store:             store,
-		PRClaimer:         store,
-		SCM:               scmProvider,
-		DataDir:           cfg.DataDir,
-		Tracker:           tracker,
-		Telemetry:         telemetry,
-		Milestones:        installMilestones(cfg),
-		Delivery:          lcm.DeliveryTelemetry(),
-		Logger:            log,
-		BackgroundContext: ctx,
-		AgentReadiness:    agentReadiness,
-		GithubIdentity:    githubIdentity,
-		// no_signal only makes sense for harnesses with complete lifecycle signal
-		// coverage; partial callbacks cannot prove that silence is abnormal.
+		Manager:              mgr,
+		Store:                store,
+		PRClaimer:            store,
+		SCM:                  scmProvider,
+		DataDir:              cfg.DataDir,
+		Tracker:              tracker,
+		Telemetry:            telemetry,
+		Milestones:           installMilestones(cfg),
+		Delivery:             lcm.DeliveryTelemetry(),
+		Logger:               log,
+		BackgroundContext:    ctx,
+		AgentReadiness:       agentReadiness,
+		GithubIdentity:       githubIdentity,
 		SignalCapable:        activitydispatch.FullySupportsHarness,
 		OutputTypeReconciler: lcm,
 		ArtifactDeleter:      artifactVersions,
 		ShareLinks:           sessionartifacts.NewShareLinks(cfg.DataDir, cfg.CloudControlPlaneURL),
 	}
-	// Guard the typed nil some tests pass, so reads list files by path instead.
 	if artifactVersions != nil {
 		deps.ArtifactTracker = artifactVersions
 	}
 	sessionSvc := sessionsvc.NewWithDeps(deps)
 	mgr.SetBranchStateRecorder(sessionSvc)
-	// Triggering a review spawns a reviewer over the worker's worktree, resolved
-	// from the reviewer registry (distinct from the worker agent set). The
-	// reviewer posts its review to the PR itself, so the service needs no SCM
-	// writer.
 	if reviewers == nil {
 		if reviewers, err = reviewer.NewResolver(); err != nil {
 			return nil, nil, nil, fmt.Errorf("reviewer resolver: %w", err)
@@ -405,7 +303,6 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	}
 	reviewerChat, _ := chat.(reviewcore.ReviewerChatController)
 	reviewEngine := reviewcore.New(reviewcore.Deps{
-		// The manager's installer gate is bound after the installer is built.
 		HarnessUse: mgr,
 		Store:      store,
 		Sessions:   store,
@@ -438,15 +335,10 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	return sessionSvc, reviewSvc, mgr, nil
 }
 
-// runtimeMessageSender is the narrow part of the concrete runtime needed by
-// ao send. Both tmux.Runtime and conpty.Runtime implement this via SendMessage.
 type runtimeMessageSender interface {
 	SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error
 }
 
-// runtimeMessenger sends the user's message directly to the session's live
-// runtime pane. The HTTP controller has already validated and sanitized the
-// message body; this adapter only resolves the stored runtime handle.
 type terminalMessageAdmission struct {
 	sync.Mutex
 	pending  string
@@ -503,8 +395,6 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 			}
 			if admission.pending != "" {
 				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
-					// Admission resets only on a new runtime handle or launch, so name the
-					// recovery instead of looking like a transient failure.
 					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume Orchestrator input", id)
 				}
 				admission.pending = ""
@@ -524,13 +414,8 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 			admission.handleID = rec.Metadata.RuntimeHandleID
 			admission.launchID = rec.Metadata.RuntimeLaunchID
 			if err := m.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, message); err != nil {
-				// A runtime may report an error after applying input, so a failed write
-				// stays pending until a native witness or a new runtime generation.
 				return fmt.Errorf("session %s: terminal submission may have been written: %w", id, err)
 			}
-			// A socket write acknowledgement precedes native acceptance. Hold admission
-			// until the adapter witnesses submission through busy chrome or a committed
-			// transcript echo; an unrelated idle redraw cannot release admission.
 			deadline := time.NewTimer(2 * time.Second)
 			defer deadline.Stop()
 			ticker := time.NewTicker(20 * time.Millisecond)
@@ -559,8 +444,6 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 	return m.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: handleID}, message)
 }
 
-// newSessionMessenger assembles the per-daemon agent messenger. For now, ao
-// send is intentionally minimal: submit the message to the live runtime pane.
 func newSessionMessenger(store *sqlite.Store, runtime runtimeMessageSender, _ *slog.Logger, resolvers ...ports.AgentResolver) ports.AgentMessenger {
 	var agents ports.AgentResolver
 	if len(resolvers) > 0 {
@@ -569,10 +452,6 @@ func newSessionMessenger(store *sqlite.Store, runtime runtimeMessageSender, _ *s
 	return runtimeMessenger{store: store, runtime: runtime, agents: agents, inputLocks: &sync.Map{}}
 }
 
-// modeAwareMessenger lets lifecycle start before the session manager while
-// ensuring every reaction crosses the same persisted-mode dispatcher as an
-// explicit `ao send`. A send in the short boot window waits for Bind instead of
-// falling through to the terminal runtime, which would be wrong for Chat sessions.
 type modeAwareMessenger struct {
 	mu     sync.RWMutex
 	target ports.AgentMessenger
@@ -611,19 +490,10 @@ func (m *modeAwareMessenger) Send(ctx context.Context, id domain.SessionID, mess
 	return target.Send(ctx, id, message)
 }
 
-// buildAgentRegistry returns a registry populated with the agent adapters the
-// daemon ships, keyed by manifest id. Registration only fails on an
-// empty/duplicate id — a programmer error, not a runtime condition.
-// The shipped adapter list lives in the adapters/agent/registry package
-// (registry.Constructors). Adding a new harness is a one-line edit there.
 func buildAgentRegistry() (*adapters.Registry, error) {
 	return agentregistry.Build()
 }
 
-// agentRegistry adapts the generic adapter Registry to ports.AgentResolver: it
-// maps a session's harness onto the registered adapter of the same id and
-// asserts that adapter drives an agent. Empty harnesses are invalid at the
-// session manager boundary and deliberately do not resolve here.
 type agentRegistry struct {
 	reg *adapters.Registry
 }
@@ -663,11 +533,6 @@ func (r reviewerAgentAuth) AuthStatus(ctx context.Context, harness domain.Review
 	}
 }
 
-// buildAgentResolver constructs the per-session agent resolver the Session
-// Manager consumes (sessionmanager.Deps.Agents): a registry of the shipped
-// adapters. It still validates AO_AGENT at startup for compatibility with the
-// config surface, but worker/orchestrator spawns must provide a resolved
-// harness before calling Agent.
 func buildAgentResolver(defaultAgent string, log *slog.Logger) (ports.AgentResolver, error) {
 	if defaultAgent == "" {
 		defaultAgent = config.DefaultAgent
@@ -688,10 +553,6 @@ func buildAgentResolver(defaultAgent string, log *slog.Logger) (ports.AgentResol
 	return resolver, nil
 }
 
-// projectRepoResolver resolves a project's on-disk repo path from the projects
-// table so gitworktree can materialise per-session worktrees off it. It replaces
-// the empty StaticRepoResolver the daemon used before (which failed every
-// lookup), turning a registered project into a spawnable one.
 type projectRepoResolver struct{ store *sqlite.Store }
 
 var _ gitworktree.RepoResolver = projectRepoResolver{}
@@ -713,11 +574,6 @@ func (r projectRepoResolver) RepoPath(projectID domain.ProjectID) (string, error
 	return rec.Path, nil
 }
 
-// chatLauncher adapts the chat service to session_manager.ChatLauncher.
-//
-// The two packages define their own request/result types on purpose so neither
-// depends on the other's; this is the one place that knows both, which keeps the
-// translation in the wiring rather than in either domain.
 type chatLauncher struct {
 	svc                         *chatsvc.Service
 	persistentHostReconcileDone <-chan struct{}
@@ -741,8 +597,6 @@ var _ interface {
 
 var _ sessionmanager.ChatLauncher = chatLauncher{}
 
-// Session Manager asserts these optional capabilities at runtime: a missing
-// forward compiles but silently turns the feature off.
 var _ sessionmanager.ChatVersionRefresher = chatLauncher{}
 var _ sessionmanager.ChatUpdateHibernator = chatLauncher{}
 var _ interface {
@@ -852,8 +706,7 @@ func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, 
 	turn, err := c.svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
 		Text:               text,
 		SpawnOpeningPrompt: true,
-		// The opening prompt is the user's own task brief, whatever carries it.
-		Origin: domain.MessageOriginHuman,
+		Origin:             domain.MessageOriginHuman,
 	})
 	if err != nil {
 		return "", err
@@ -881,25 +734,16 @@ func (c chatLauncher) HibernateChatForUpdate(ctx context.Context, id domain.Sess
 	return c.svc.HibernateChatForUpdate(ctx, id)
 }
 
-// WaitForWake lets a version move hold its restart permit until the provider
-// it stopped has started again; without it the manager skips the wait.
 func (c chatLauncher) WaitForWake(ctx context.Context, id domain.SessionID) error {
 	return c.svc.WaitForWake(ctx, id)
 }
 
-// The manager discovers these optional capabilities by type assertion, so a
-// method the wrapper forgets to forward is lost silently.
 var (
 	_ sessionmanager.ChatWakeWaiter       = chatLauncher{}
 	_ sessionmanager.ChatVersionRefresher = chatLauncher{}
 	_ sessionmanager.ChatUpdateHibernator = chatLauncher{}
 )
 
-// ArmChatHandoff closes Chat intake and dispatch synchronously at transition
-// acceptance. PrepareChatHandoff then settles interrupt work or waits for drain
-// work before Session Manager stops the source. These methods intentionally live
-// on the wiring adapter: Session Manager's handoff capability is optional, but
-// wrapping the concrete Chat service must not erase it.
 func (c chatLauncher) ArmChatHandoff(
 	ctx context.Context,
 	id domain.SessionID,
@@ -908,8 +752,6 @@ func (c chatLauncher) ArmChatHandoff(
 	return c.svc.ArmChatHandoff(ctx, id, policy)
 }
 
-// MarkAccountSwitch marks the turn an account move stopped, so the chat shows
-// the switch instead of a failure.
 func (c chatLauncher) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string) error {
 	return c.svc.MarkAccountSwitch(ctx, id, accountID)
 }
@@ -930,10 +772,6 @@ func (c chatLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
 	return c.svc.StopChat(ctx, id)
 }
 
-// reviewPRRefresher lets a review trigger fetch a worker's PR fresh from the
-// provider through the session service's claim, which re-reads the PR and
-// records it on the session. Claiming a PR the session already owns only
-// refreshes its facts; another active session's PR is never taken over.
 type reviewPRRefresher struct {
 	sessions interface {
 		ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)

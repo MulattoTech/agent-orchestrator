@@ -104,7 +104,6 @@ describe("coercePrivacyGuideRequest", () => {
 
 	it("accepts only named color functions, nested ones included", () => {
 		const colorsOf = (colors: Record<string, string>) => coercePrivacyGuideRequest({ ...request, appearance: { scheme: "dark", colors } })?.appearance.colors;
-		// What AO's themes produce: oklch() and color-mix() in the default theme, hex in the catalog.
 		expect(colorsOf({ bg: "oklch(0.3 0.002 250)", fg: "#1e1e2e", muted: "rgb(180 180 180)", border: "#ffffff17" }))
 			.toEqual({ bg: "oklch(0.3 0.002 250)", fg: "#1e1e2e", muted: "rgb(180 180 180)", border: "#ffffff17" });
 		expect(colorsOf({ bg: "url(x)", fg: "var(--x)", muted: "color-mix(in oklch, url(x) 50%, red)", border: "image-set(x)" })).toEqual({});
@@ -241,7 +240,6 @@ describe("PrivacyGuide", () => {
 		await expect(subject.update(allGranted)).resolves.toBe(true);
 		expect(window.close).not.toHaveBeenCalled();
 
-		// Revoked on the shown pane: the strip turns back into a drop target, in place.
 		await expect(subject.update({ accessibility: false, screenRecording: true })).resolves.toBe(true);
 		expect(window.html()).toContain("data-drag-app");
 		expect(deps.openExternal).toHaveBeenCalledTimes(1);

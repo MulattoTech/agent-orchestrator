@@ -1,16 +1,9 @@
 import type { Rect, SettingsWindowSnapshot } from "./settings-window-watch";
 
-// A drop strip docked under System Settings while Cua Driver's macOS
-// permissions are missing. AO cannot reach into System Settings, so the strip
-// follows its window and offers CuaDriver.app as a drag source: dropping it on
-// the privacy list adds it there. The user picks which permission's pane to
-// open; each pick reopens System Settings there.
-
 export type PrivacyPane = "accessibility" | "screenRecording";
 
 export const PRIVACY_PANES: readonly PrivacyPane[] = ["accessibility", "screenRecording"];
 
-// The only System Settings panes external-open lets the renderer open.
 export const PRIVACY_PANE_URLS: Record<PrivacyPane, string> = {
 	accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
 	screenRecording: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
@@ -20,7 +13,6 @@ export const CUA_DRIVER_APP_PATH = "/Applications/CuaDriver.app";
 
 export type PrivacyGuideScheme = "light" | "dark";
 
-/** AO's own surface colors, so the strip matches the app's theme rather than the OS appearance. */
 export interface PrivacyGuideColors {
 	bg: string;
 	fg: string;
@@ -33,7 +25,6 @@ export interface PrivacyGuideAppearance {
 	colors: Partial<PrivacyGuideColors>;
 }
 
-/** What the renderer asks for: which pane to point at, what is already granted, AO's look, and its translated copy. */
 export interface PrivacyGuideRequest {
 	pane: PrivacyPane;
 	granted: Record<PrivacyPane, boolean>;
@@ -41,7 +32,6 @@ export interface PrivacyGuideRequest {
 	text: {
 		drag: string;
 		hint: string;
-		/** Shown instead of drag/hint on a pane CuaDriver already holds. */
 		allowed: string;
 		allowedHint: string;
 		labels: Record<PrivacyPane, string>;
@@ -50,14 +40,9 @@ export interface PrivacyGuideRequest {
 	};
 }
 
-// Panel links navigate to this scheme and the main process intercepts them.
 const GUIDE_SCHEME = "ao-privacy-guide:";
 const MAX_TEXT = 400;
 const MAX_COLOR = 160;
-// A hex color, or a CSS color function whose every function (nested ones
-// included, as in color-mix()) is a color function: no url(), var() or other
-// non-color, and nothing that could end the declaration, the rule, or the style
-// element it lands in.
 const HEX_COLOR = /^#[0-9a-f]{3,8}$/i;
 const COLOR_FUNCTION_SHAPE = /^[a-z-]+\([a-z0-9#.,%/\s()+-]*\)$/i;
 const COLOR_FUNCTIONS = new Set(["rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix"]);
@@ -69,7 +54,6 @@ function isColor(value: string): boolean {
 }
 const COLOR_KEYS: readonly (keyof PrivacyGuideColors)[] = ["bg", "fg", "muted", "border"];
 
-// Used for any color the renderer did not send; they match AO's default theme.
 const DEFAULT_COLORS: Record<PrivacyGuideScheme, PrivacyGuideColors & { ok: string }> = {
 	dark: { bg: "oklch(0.300 0.002 250)", fg: "oklch(0.970 0.002 250)", muted: "oklch(0.720 0.002 250)", border: "oklch(1 0 0 / 9%)", ok: "#4ade80" },
 	light: { bg: "oklch(1 0 0)", fg: "oklch(0.18 0 0)", muted: "oklch(0.5 0 0)", border: "oklch(0 0 0 / 10%)", ok: "#16a34a" },
@@ -93,7 +77,6 @@ function color(value: unknown): string | undefined {
 	return typeof value === "string" && value.length <= MAX_COLOR && isColor(value.trim()) ? value.trim() : undefined;
 }
 
-/** A bad scheme falls back to dark and a bad color to the scheme's default; neither refuses the request. */
 function coerceAppearance(value: unknown): PrivacyGuideAppearance {
 	const input = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
 	const scheme: PrivacyGuideScheme = input.scheme === "light" ? "light" : "dark";
@@ -106,7 +89,6 @@ function coerceAppearance(value: unknown): PrivacyGuideAppearance {
 	return { scheme, colors };
 }
 
-/** Validates an IPC payload from the renderer; malformed copy or panes are refused whole. */
 export function coercePrivacyGuideRequest(value: unknown): PrivacyGuideRequest | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const input = value as Record<string, unknown>;
@@ -142,10 +124,6 @@ export function parsePrivacyGuideAction(url: string): PrivacyGuideAction | undef
 	return undefined;
 }
 
-/**
- * Docks the strip under the System Settings window, as wide as it, inside the
- * work area; with no room below it sits over the window's bottom edge.
- */
 export function placePrivacyGuide(settings: Rect, workArea: Rect): Rect {
 	const height = PRIVACY_GUIDE_HEIGHT;
 	const width = Math.round(Math.min(Math.max(settings.width, MIN_WIDTH), workArea.width - GAP * 2));
@@ -162,7 +140,6 @@ function escapeHtml(value: string): string {
 
 const GEAR_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`;
 
-/** The CuaDriver icon once read; until then a gear, spinning while the read is in flight. */
 export type PrivacyGuideIcon = { kind: "loading" } | { kind: "missing" } | { kind: "image"; dataUrl: string };
 
 function iconHtml(icon: PrivacyGuideIcon): string {
@@ -173,10 +150,6 @@ function iconHtml(icon: PrivacyGuideIcon): string {
 const ARROW_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>`;
 const CHECK_SVG = `<svg class="ok" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`;
 
-/**
- * The strip's palette: AO's popover tokens as sent, the scheme's defaults for
- * any missing, and the in-between surfaces mixed from them per scheme.
- */
 function paletteCss({ scheme, colors }: PrivacyGuideAppearance): string {
 	const base = { ...DEFAULT_COLORS[scheme], ...colors };
 	const mix = (fg: number) => `color-mix(in oklch, var(--fg) ${fg}%, var(--bg))`;
@@ -186,10 +159,6 @@ function paletteCss({ scheme, colors }: PrivacyGuideAppearance): string {
 	return `:root { color-scheme: ${scheme}; --bg: ${base.bg}; --fg: ${base.fg}; --muted: ${base.muted}; --border: ${base.border}; --ok: ${base.ok}; --hover: ${derived.hover}; --tile: ${derived.tile}; --tab: ${derived.tab}; --track: ${derived.track}; }`;
 }
 
-/**
- * The strip's whole page, in AO's theme. On a pane CuaDriver already holds it
- * says so and offers no drag: there is nothing to add, only a switch to review.
- */
 export function renderPrivacyGuideHtml(request: PrivacyGuideRequest, icon: PrivacyGuideIcon = { kind: "missing" }): string {
 	const { pane, granted, text: copy } = request;
 	const allowed = granted[pane];
@@ -263,15 +232,12 @@ export interface PrivacyGuideDeps {
 	createWindow(): PrivacyGuideWindow;
 	openExternal(url: string): Promise<unknown>;
 	readIcon(appPath: string): Promise<string | undefined>;
-	/** Streams System Settings snapshots; onError means they will not come. Returns a stop. */
 	watchSettings(onSnapshot: (snapshot: SettingsWindowSnapshot) => void, onError: () => void): () => void;
 	workAreaFor(bounds: Rect): Rect;
-	/** Where the strip goes when System Settings cannot be followed. */
 	fallbackBounds(): Rect;
 	ownPid: number;
 }
 
-/** Owns the one guide strip: opens the chosen pane, (re)renders it, docks it to System Settings, and follows its links. */
 export class PrivacyGuide {
 	private window?: PrivacyGuideWindow;
 	private request?: PrivacyGuideRequest;
@@ -288,14 +254,12 @@ export class PrivacyGuide {
 		this.request = request;
 		await this.deps.openExternal(PRIVACY_PANE_URLS[request.pane]);
 		const window = this.ensureWindow();
-		// The strip shows at once with a spinning gear and swaps in the icon when read.
 		this.iconRead ??= this.deps.readIcon(CUA_DRIVER_APP_PATH)
 			.then((dataUrl) => { this.icon = dataUrl ? { kind: "image", dataUrl } : { kind: "missing" }; })
 			.catch(() => { this.icon = { kind: "missing" }; })
 			.then(() => this.render())
 			.catch(() => undefined);
 		await this.render();
-		// Docked placement waits for the first snapshot so the strip never flashes elsewhere.
 		if (!this.following && !window.isDestroyed()) {
 			window.setBounds(this.deps.fallbackBounds());
 			window.showInactive();
@@ -305,8 +269,6 @@ export class PrivacyGuide {
 	private async render(): Promise<void> {
 		const window = this.window;
 		if (!window || window.isDestroyed() || !this.request) return;
-		// A newer render (the icon arriving, a pane pick) aborts this load; only
-		// the latest one's failure matters.
 		const id = ++this.renderId;
 		try {
 			await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(renderPrivacyGuideHtml(this.request, this.icon))}`);
@@ -315,17 +277,10 @@ export class PrivacyGuide {
 		}
 	}
 
-	/** Whether the strip is up, or on its way up from a show() still in flight. */
 	isOpen(): boolean {
 		return this.request !== undefined;
 	}
 
-	/**
-	 * Updates what is granted; closes once the last missing permission is
-	 * granted. A guide opened to review grants that were all already on stays,
-	 * and follows a revoke made from it. Resolves to whether the strip is still
-	 * open, so the renderer stops following grants once it is gone.
-	 */
 	async update(granted: Record<PrivacyPane, boolean>): Promise<boolean> {
 		const request = this.request;
 		if (!request) return false;
@@ -338,9 +293,7 @@ export class PrivacyGuide {
 		}
 		const changed = PRIVACY_PANES.some((pane) => granted[pane] !== request.granted[pane]);
 		if (!changed) return true;
-		// Move on to the next missing permission once the shown one is granted.
 		const pane = granted[request.pane] && !request.granted[request.pane] ? PRIVACY_PANES.find((candidate) => !granted[candidate])! : request.pane;
-		// The pane stays where it is: re-render the strip, without reopening System Settings.
 		this.request = { ...request, pane, granted };
 		if (pane === request.pane) await this.render();
 		else await this.show(this.request);
@@ -366,7 +319,6 @@ export class PrivacyGuide {
 		const window = this.window;
 		if (!window || window.isDestroyed()) return;
 		if (snapshot.settingsPid < 0) {
-			// The user quit System Settings: the guide has nothing left to point at.
 			if (this.sawSettings) this.close();
 			return;
 		}
@@ -395,7 +347,6 @@ export class PrivacyGuide {
 		this.stopWatching = this.deps.watchSettings(
 			(snapshot) => this.follow(snapshot),
 			() => {
-				// Cannot follow System Settings; park the strip where it can still be used.
 				this.following = false;
 				if (this.window && !this.window.isDestroyed()) {
 					this.window.setBounds(this.deps.fallbackBounds());

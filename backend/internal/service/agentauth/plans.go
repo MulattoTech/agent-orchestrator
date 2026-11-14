@@ -8,11 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
-// plans is the code-reviewed authentication allowlist in stable Harness
-// settings order. Commands must be added here, never supplied by clients.
-// qwenAuthInput works with Qwen's default editor and its optional Vim mode.
-// In NORMAL, i enters INSERT and Backspace is harmless on the empty prompt; in
-// INSERT/default mode, Backspace removes the literal i before /auth is entered.
 const qwenAuthInput = "i\x7f/auth\r"
 
 var plans = []Plan{
@@ -50,12 +45,6 @@ var plans = []Plan{
 	plan("codewhale", ActionSetup, "Set up Codewhale", []string{"codewhale", "auth", "set", "--provider", "deepseek"}, "Save a provider key in Codewhale's native credential store", "https://codewhale.net/en/docs/auth"),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
 	documentationPlan("unreal-agent", "View Unreal Agent documentation", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for Orchestrator's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md"),
-	// DeepSeek Harness has no login subcommand — credentials are records in its
-	// own store (~/.dsh/.credentials.yaml) — but the web profile serves the
-	// Models page that writes them, which is the route a failed run names
-	// ("store DEEPSEEK_API_KEY through the credentials service (the web Models
-	// page writes it)"). The profile prints a tokenised URL and opens it, so
-	// setup lands on the page that does the work rather than on a docs link.
 	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; Orchestrator forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
@@ -68,9 +57,6 @@ func terminalInputPlan(agentID string, action Action, title string, command []st
 	return p
 }
 
-// kimchiLoginPlan starts Kimchi's TUI, which opens the authentication picker
-// on first launch. If the picker is not already open, /login is sent once the
-// TUI is ready.
 func kimchiLoginPlan() Plan {
 	p := plan("kimchi", ActionLogin, "Log in to Kimchi", []string{"kimchi"}, "Kimchi opens the authentication method picker in the PTY", "https://docs.kimchi.dev/docs/service-keys")
 	p.initialInput = "/login"
@@ -81,15 +67,6 @@ func kimchiLoginPlan() Plan {
 	return p
 }
 
-// kimiLoginPlan opens Kimi's TUI and injects /login so the native platform
-// picker (Kimi Code browser login and Kimi Platform API keys) is offered;
-// the bare `kimi login` subcommand only runs the device-code flow. The input
-// is sent automatically once Kimi renders its unauthenticated ready message,
-// without relying on a fixed startup delay. initialInput carries no trailing
-// Enter because terminal delivery
-// (SendMessage) presses it. Kimi's first-run "Trust this folder?" dialog would
-// swallow that input in AO's private auth workspace, so the workspace trust
-// record is seeded first.
 func kimiLoginPlan() Plan {
 	p := plan("kimi", ActionLogin, "Log in to Kimi", []string{"kimi"}, "Kimi opens its login picker automatically", "https://moonshotai.github.io/kimi-code/en/")
 	p.initialInput = "/login"
@@ -98,14 +75,6 @@ func kimiLoginPlan() Plan {
 	return p
 }
 
-// piLoginPlan opens Pi's TUI and injects /login automatically; Pi has no
-// login subcommand. The primary ready marker is the footer's context stat: a
-// fresh Pi session always renders "0.0%/<window>" there, with or without a
-// selected model and even with quietStartup, which drops the onboarding line
-// kept as a second marker. Pi keeps text typed during its brief startup tail
-// in the editor, and the runtime's pause before Enter covers that window. If a
-// future Pi renders neither marker, /login is still sent when the ready wait
-// expires: by then Pi is at its prompt, where /login is always valid.
 func piLoginPlan() Plan {
 	p := plan("pi", ActionLogin, "Log in to Pi", []string{"pi"}, "Pi opens its login picker automatically", "https://github.com/earendil-works/pi")
 	p.initialInput = "/login"
@@ -117,13 +86,6 @@ func piLoginPlan() Plan {
 	return p
 }
 
-// copilotLoginPlan opens Copilot's TUI and injects /login so its native
-// account picker (GitHub.com, GitHub Enterprise Cloud, or Microsoft Entra) is
-// offered; the bare `copilot login` subcommand jumps straight into the
-// GitHub.com browser flow. The input is sent once the composer footer renders,
-// or after the bounded ready wait when slow hooks delay that footer.
-// Copilot's "Confirm folder trust" dialog would swallow that input in AO's
-// private auth workspace, so the folder is recorded as trusted first.
 func copilotLoginPlan() Plan {
 	p := plan("copilot", ActionLogin, "Log in to GitHub Copilot", []string{"copilot"}, "Copilot opens its account picker automatically", "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli")
 	p.initialInput = "/login"
@@ -133,10 +95,6 @@ func copilotLoginPlan() Plan {
 	return p
 }
 
-// geminiSetupPlan waits for Gemini's editor to render, types /auth, then waits
-// for the command completion to prove the slash-command registry is loaded
-// before pressing Enter. Gemini's --prompt-interactive flag (and submitting
-// too early during startup) treats /auth as a model prompt instead.
 func geminiSetupPlan() Plan {
 	p := plan("gemini", ActionSetup, "Set up Gemini CLI", []string{"gemini"}, "Gemini opens its authentication picker automatically; if /auth remains in the editor, press Enter once command completion appears", "https://geminicli.com/docs/get-started/authentication/")
 	p.initialInputReadyStates = []shellterm.InitialInputReadyState{
@@ -150,10 +108,6 @@ func geminiSetupPlan() Plan {
 	return p
 }
 
-// ompLoginPlan uses OMP's native onboarding command, whose first scene is
-// provider sign-in even when setup is already complete. OMP paints its prompt
-// before opening first-run setup, so prompt markers cannot safely gate /login
-// injection. Let OMP own the picker without sending any terminal input.
 func ompLoginPlan() Plan {
 	return plan("omp", ActionLogin, "Log in to OMP", []string{"omp", "setup"}, "Sign in to a provider in OMP's setup wizard, then finish or skip the remaining setup steps", "https://github.com/can1357/oh-my-pi")
 }
@@ -195,8 +149,6 @@ func plan(agentID string, action Action, title string, command []string, guidanc
 	}
 }
 
-// Only documented CLI subcommands belong here. An absent entry explicitly
-// means unsupported; do not infer logout from login or delete credential files.
 func logoutCommand(agentID string) []string {
 	switch agentID {
 	case "claude-code":

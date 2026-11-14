@@ -37,22 +37,11 @@ async function fetchInstallJob(): Promise<InstallJob> {
 	return data;
 }
 
-/**
- * Cua Driver, the computer-use driver behind the agents' computer-use tools. Installs
- * through the daemon's fixed installer allowlist like the agent CLIs do, then
- * shows the facts that decide whether agents can use it: the background
- * service and, on macOS, the privacy permissions CuaDriver.app holds.
- */
 export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const theme = useResolvedTheme();
-	// Set while the floating guide beside System Settings is up; it follows the
-	// grants until the guide closes (everything granted, its X, or System
-	// Settings quitting).
 	const [guiding, setGuiding] = useState(false);
-	// The guide is driven from here alone: leaving this page takes it down, so
-	// it never sits beside System Settings with grants nobody updates.
 	const mounted = useRef(true);
 	const guideOpened = useRef(false);
 	useEffect(() => {
@@ -66,7 +55,6 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	const status = useQuery({
 		queryKey: computerUseStatusQueryKey,
 		queryFn: fetchStatus,
-		// A permission request waits on the user in System Settings; follow it.
 		refetchInterval: (query) => (query.state.data?.permissions?.granting || guiding ? GRANT_POLL_MS : false),
 	});
 	const job = useQuery({
@@ -78,12 +66,8 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [copied, setCopied] = useState(false);
 	const agentAccess = useUpdateComputerUse();
-	// Set when this panel starts a fresh install: installing the driver is asking
-	// for agents to use it, so its success turns agent access on. An update
-	// leaves the user's choice alone.
 	const enableOnInstall = useRef(false);
 
-	// A finished install changes what status reports; refresh it once.
 	const jobStatus = job.data?.status;
 	const previousJobStatus = useRef(jobStatus);
 	useEffect(() => {
@@ -134,7 +118,6 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 				close: t("settings.computerUse.guide.close"),
 			},
 		});
-		// Left the page while it opened: the unmount close may have run first.
 		if (!mounted.current) {
 			void aoBridge.app.closePrivacyGuide();
 			return;
@@ -145,7 +128,6 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 		const { data, error } = await apiClient.POST("/api/v1/computer-use/permissions/grant");
 		if (error || !data) throw apiErrorException(error);
 		queryClient.setQueryData(computerUseStatusQueryKey, data);
-		// The request lists CuaDriver in System Settings; point the user at it.
 		if (data.permissions) await showGuide(firstMissing(data.permissions), data.permissions);
 	});
 	const copyCommand = async (command: string) => {
@@ -158,16 +140,12 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	const installed = Boolean(current?.installed);
 	const installing = action === "install" || jobStatus === "running";
 	const failed = jobStatus === "failed" || jobStatus === "interrupted";
-	// Unsupported with a command: AO knows the command but cannot run it here,
-	// for a fresh install or an update alike.
 	const needsInstaller = !installed || Boolean(current?.updateAvailable);
 	const manualCommand = jobStatus === "unsupported" && needsInstaller ? job.data?.command : undefined;
 	const permissions = current?.permissions;
 
 	const accessibilityState = permissions?.accessibility;
 	const screenRecordingState = permissions?.screenRecording;
-	// Every poll reports in, so a guide closed from its own side (X, System
-	// Settings quitting) ends the polling at the next one.
 	const statusUpdatedAt = status.dataUpdatedAt;
 	useEffect(() => {
 		if (!guiding || !accessibilityState || !screenRecordingState) return;
@@ -223,7 +201,6 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 				) : null}
 				{installed && current ? (
 					<>
-						{/* A running service needs no row; only its absence is worth reporting. */}
 						{current.daemon !== "running" ? (
 							<SettingsRow label={t("settings.computerUse.service")} description={<span className="text-error">{t("settings.computerUse.serviceNotRunning")}</span>}>
 								<Button type="button" size="sm" variant="ghost" disabled={action !== null} onClick={() => void startService()}>
@@ -237,12 +214,9 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 								label={t("settings.computerUse.permissions")}
 								description={permissions.grantError ? <span className="text-error">{permissions.grantError}</span>
 									: current.daemon !== "running" ? t("settings.computerUse.permissionsNeedService")
-									// All granted reads from the trailing state alone; otherwise name each one.
 									: allGranted(permissions.accessibility, permissions.screenRecording) ? undefined
 									: `${t("settings.computerUse.accessibility")}: ${t(`settings.computerUse.permission.${permissions.accessibility}`)} · ${t("settings.computerUse.screenRecording")}: ${t(`settings.computerUse.permission.${permissions.screenRecording}`)}`}
 							>
-								{/* One way in: missing grants are asked for first; either way the
-								    guide docks under System Settings, where the user picks the pane. */}
 								<PermissionsGear
 									busy={permissions.granting || action === "grant" || action === "guide"}
 									disabled={action !== null}
@@ -274,11 +248,6 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	);
 }
 
-/**
- * "Let agents use this computer": while on, new chat sessions get the
- * computer-use tools and a standing instruction to read their guide first.
- * It needs Cua Driver installed to turn on; once on it can always be turned off.
- */
 function AgentAccessRow({ installed, access }: { installed: boolean; access: ReturnType<typeof useUpdateComputerUse> }) {
 	const { t } = useTranslation();
 	const { settings, isLoading } = useSettings();
@@ -306,7 +275,6 @@ function isMac(): boolean {
 	return document.documentElement.dataset.aoPlatform === "darwin";
 }
 
-/** The macOS permissions row's only control: a gear, spinning while state loads or System Settings is waited on. */
 function PermissionsGear({ busy, disabled, onClick }: { busy: boolean; disabled: boolean; onClick: () => void }) {
 	const { t } = useTranslation();
 	const label = t("settings.computerUse.openPermissions");
@@ -318,10 +286,6 @@ function PermissionsGear({ busy, disabled, onClick }: { busy: boolean; disabled:
 	);
 }
 
-/**
- * AO's resolved light/dark mode and popover tokens, so the strip matches the
- * app (theme catalog included) instead of the OS appearance.
- */
 function guideAppearance(scheme: Theme): PrivacyGuideAppearance {
 	const style = getComputedStyle(document.documentElement);
 	const token = (name: string) => style.getPropertyValue(name).trim() || undefined;
@@ -339,7 +303,6 @@ function grantedMap(permissions: NonNullable<ComputerUseStatus["permissions"]>):
 	return { accessibility: permissions.accessibility === "granted", screenRecording: permissions.screenRecording === "granted" };
 }
 
-/** The pane the guide opens on: the first permission still missing. */
 function firstMissing(permissions: NonNullable<ComputerUseStatus["permissions"]>): PrivacyPane {
 	const granted = grantedMap(permissions);
 	return PRIVACY_PANES.find((pane) => !granted[pane]) ?? "accessibility";

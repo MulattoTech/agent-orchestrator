@@ -5,9 +5,7 @@ import { cn } from "../lib/utils";
 import { AppLink } from "./AppLink";
 import { linksOnlyImages, PRDescriptionImage } from "./PRDescriptionImage";
 
-// The review summary's typography, for PR comments and their preview.
 const bodyClass = cn(
-	// Comment text reads at full contrast, like a PR page; code stays the size of the words around it.
 	"min-w-0 select-text break-words text-xs leading-[1.6] text-foreground/90",
 	"[&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2",
 	"[&_code]:rounded [&_code]:bg-muted/70 [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.92em] [&_code]:text-foreground [&_code]:[overflow-wrap:anywhere]",
@@ -18,17 +16,11 @@ const bodyClass = cn(
 	"[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-2 [&_blockquote]:text-muted-foreground",
 );
 
-// Outside the component, so a re-render keeps an open image lightbox open.
 const markdownComponents: Components = {
 	a: ({ node, href, children }) => linksOnlyImages(node) ? <>{children}</> : <AppLink href={href} rel="noopener noreferrer" target="_blank">{children}</AppLink>,
 	img: ({ alt, src }) => <PRDescriptionImage alt={alt} src={typeof src === "string" ? src : undefined} />,
 };
 
-/**
- * A PR comment's markdown. Provider content: react-markdown never renders raw
- * HTML and would print it as text, so bots' markup (CodeRabbit's comments,
- * <details> and badges) is reduced to its text and images first.
- */
 export function PRMarkdown({ body, className }: { body: string; className?: string }) {
 	return (
 		<div className={cn(bodyClass, className)}>

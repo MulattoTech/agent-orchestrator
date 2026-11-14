@@ -173,7 +173,6 @@ describe("ComputerUseSection", () => {
 			granted: { accessibility: true, screenRecording: false },
 			text: expect.objectContaining({ drag: "Drag CuaDriver into the list above", labels: { accessibility: "Accessibility", screenRecording: "Screen Recording" } }),
 		}));
-		// While macOS waits on the user, the gear spins and cannot be pressed again.
 		await waitFor(() => expect(screen.getByRole("button", { name: "Open in System Settings" })).toHaveAttribute("aria-busy", "true"));
 		expect(screen.getByRole("button", { name: "Open in System Settings" })).toBeDisabled();
 		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith({ accessibility: true, screenRecording: false }));
@@ -191,7 +190,6 @@ describe("ComputerUseSection", () => {
 			granted: { accessibility: true, screenRecording: true },
 			text: expect.objectContaining({ allowed: "CuaDriver is allowed here", allowedHint: "Turn off its switch to revoke access." }),
 		}));
-		// Still followed: a revoke made from the strip reaches it.
 		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith({ accessibility: true, screenRecording: true }));
 	});
 
