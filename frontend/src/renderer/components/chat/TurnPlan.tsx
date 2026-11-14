@@ -245,6 +245,18 @@ function activeStepIndex(plan: ConversationPlan): number {
  * ring.
  */
 function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
+	const active = live && status === "in_progress";
+	const [spinning, setSpinning] = useState(active);
+	useEffect(() => {
+		if (active) {
+			setSpinning(true);
+			return;
+		}
+		if (!spinning) return;
+		// Keep rotating through the opacity transition, then stop the hidden arc.
+		const timer = setTimeout(() => setSpinning(false), 200);
+		return () => clearTimeout(timer);
+	}, [active, spinning]);
 	const shown = (mark: PlanStepStatus) =>
 		cn("transition-opacity duration-200 motion-reduce:transition-none", status === mark ? "opacity-100" : "opacity-0");
 	return (
@@ -276,7 +288,7 @@ function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
 						strokeDasharray="12 43"
 						className={cn(
 							"origin-center transition-opacity duration-200 [transform-box:fill-box] motion-reduce:animate-none motion-reduce:transition-none",
-							live && status === "in_progress" && "animate-spin",
+							(active || spinning) && "animate-spin",
 							!live && "opacity-0",
 						)}
 					/>

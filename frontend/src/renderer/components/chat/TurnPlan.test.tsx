@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TurnPlan } from "./TurnPlan";
@@ -23,6 +23,8 @@ const plan: ConversationPlan = {
 };
 
 describe("TurnPlan", () => {
+	afterEach(() => vi.useRealTimers());
+
 	it("renders the steps as a list with the plan's own explanation", () => {
 		render(<TurnPlan plan={plan} />);
 		expect(screen.getByRole("list")).toBeInTheDocument();
@@ -49,13 +51,38 @@ describe("TurnPlan", () => {
 
 	// The step in progress spins only while the agent can still be working on it. A
 	// settled turn's unfinished step keeps its faint ring, with no arc.
-	it("shows the spinning arc only while the turn runs", () => {
+	it("keeps the arc spinning through its finishing fade", () => {
+		vi.useFakeTimers();
 		const { container, rerender } = render(<TurnPlan plan={plan} live />);
 		expect(container.querySelectorAll(".animate-spin")).toHaveLength(1);
 		expect(container.querySelector(".animate-spin")).not.toHaveClass("opacity-0");
 		rerender(<TurnPlan plan={plan} />);
 		expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
+		expect(container.querySelector(".animate-spin")).toHaveClass("opacity-0");
+		act(() => vi.advanceTimersByTime(199));
+		expect(container.querySelectorAll(".animate-spin")).toHaveLength(1);
+		act(() => vi.advanceTimersByTime(1));
 		expect(container.querySelectorAll(".animate-spin")).toHaveLength(0);
+	});
+
+	it("stops a completed step after its fade while the turn continues", () => {
+		vi.useFakeTimers();
+		const { container, rerender } = render(<TurnPlan plan={plan} live />);
+		rerender(<TurnPlan plan={{ ...plan, steps: plan.steps.map((step) => ({ ...step, status: step.status === "in_progress" ? "completed" : step.status })) }} live />);
+		expect(container.querySelectorAll(".animate-spin")).toHaveLength(1);
+		act(() => vi.advanceTimersByTime(200));
+		expect(container.querySelectorAll(".animate-spin")).toHaveLength(0);
+	});
+
+	it("keeps spinning when a turn resumes during the fade", () => {
+		vi.useFakeTimers();
+		const { container, rerender } = render(<TurnPlan plan={plan} live />);
+		rerender(<TurnPlan plan={plan} />);
+		act(() => vi.advanceTimersByTime(100));
+		rerender(<TurnPlan plan={plan} live />);
+		act(() => vi.advanceTimersByTime(200));
+		expect(container.querySelectorAll(".animate-spin")).toHaveLength(1);
+		expect(container.querySelector(".animate-spin")).not.toHaveClass("opacity-0");
 	});
 
 	// A finished plan is not still planning, even on a turn that is technically live.
