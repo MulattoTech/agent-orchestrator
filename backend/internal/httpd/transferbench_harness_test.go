@@ -69,9 +69,11 @@ const (
 )
 
 // simulatorClientSHA256 is transferbench.ListDigest of ClientSourceFiles at
-// 999321b38cc5, the renderer revision this simulator mirrors. A revision whose
-// renderer files differ is reported as unmodeled, never silently compared.
-const simulatorClientSHA256 = "3c8253e88893725ac4d9881153d6efe37a2cab5738ed63efeda8323d49c763d5"
+// eb1876869, the renderer revision this simulator mirrors. Its paging and
+// refresh rules are unchanged since 999321b38cc5, where the simulator was
+// written. A revision whose renderer files differ is reported as unmodeled,
+// never silently compared.
+const simulatorClientSHA256 = "5d0b1593e5b830cba428f233ed72dbee616570a213b43b7d544e98570f86d19d"
 
 func TestTransferBenchmark(t *testing.T) {
 	if os.Getenv(benchEnvOut) == "" && os.Getenv("AO_TRANSFERBENCH") != "1" && os.Getenv(benchEnvUpdate) != "1" {
