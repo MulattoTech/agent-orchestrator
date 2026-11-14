@@ -2590,6 +2590,7 @@ func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) error {
 	c.sendMu.Unlock()
 	if err != nil {
 		c.AbortHandoff()
+		restoreSteers()
 		return fmt.Errorf("cancel queued turns before forced handoff: %w", err)
 	}
 	if active {
