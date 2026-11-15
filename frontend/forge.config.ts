@@ -56,6 +56,7 @@ function ignoreFromVitePackage(file: string): boolean {
 		return file !== "/node_modules/better-sqlite3/build/Release"
 			&& file !== "/node_modules/better-sqlite3/build/Release/better_sqlite3.node";
 	}
+	if (file === "/node_modules/better-sqlite3/bin" || file.startsWith("/node_modules/better-sqlite3/bin/")) return true;
 	// Release source maps are uploaded to Sentry, never shipped (vite.sentry.ts).
 	if (file.startsWith("/.vite")) return file.endsWith(".map");
 	if (file === "/node_modules") return false;
@@ -398,7 +399,9 @@ const config: ForgeConfig = {
 			return makeResults;
 		},
 	},
-	rebuildConfig: {},
+	// prePackage already builds this exact Electron ABI in the source tree.
+	// Rebuilding again after copy would recreate the filtered intermediates.
+	rebuildConfig: { ignoreModules: ["better-sqlite3"] },
 	makers: [
 		// Windows installer: NSIS via electron-builder (see makers/maker-nsis.ts).
 		// Replaces Squirrel.Windows, which only does per-user installs with no
