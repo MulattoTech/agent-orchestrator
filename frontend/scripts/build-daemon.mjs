@@ -73,7 +73,7 @@ if (workOSClientID) {
 	ldflags.push(`-X ${cliPackage}.defaultWorkOSClientID=${workOSClientID}`);
 }
 
-const result = spawnSync("go", ["build", "-ldflags", ldflags.join(" "), "-o", buildOutPath, "./cmd/ao"], {
+const result = spawnSync("go", ["build", "-trimpath", "-ldflags", ldflags.join(" "), "-o", buildOutPath, "./cmd/ao"], {
 	cwd: backendRoot,
 	stdio: "inherit",
 	windowsHide: true,

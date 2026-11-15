@@ -163,6 +163,9 @@ func Run(buildVersion string) (retErr error) {
 	if err != nil {
 		return err
 	}
+	// Owner-local qualification only: this package must not warm provider
+	// authentication, accounts, or model catalogs during its empty-state smoke.
+	localLifecycleTest := os.Getenv("AO_LOCAL_LIFECYCLE_TEST") == "1"
 	cfg.Telemetry.AppVersion = telemetryAppVersion(cfg.Telemetry.AppVersion, buildVersion)
 	// Children inherit os.Environ(); the export settings stay in cfg only.
 	config.ScrubTelemetryEnv()
@@ -752,7 +755,9 @@ func Run(buildVersion string) (retErr error) {
 				agentSvc.InvalidateAgentAuthentication(string(harness))
 			}
 		})
-		agentSvc.WarmModelCatalogs(ctx)
+		if !localLifecycleTest {
+			agentSvc.WarmModelCatalogs(ctx)
+		}
 	}
 	if runner, ok := sessMgr.(interface {
 		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
@@ -1106,7 +1111,9 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
-	agentSvc.WarmCodexAccounts()
+	if !localLifecycleTest {
+		agentSvc.WarmCodexAccounts()
+	}
 	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, telemetrySink, log)
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
@@ -1417,14 +1424,16 @@ func Run(buildVersion string) (retErr error) {
 		// lazily Ensure on demand. Kick it here, after the listener is live, so its
 		// bounded subprocess probes no longer contend with the synchronous
 		// migration and fencing reconcile that gate the port bind.
-		readinessDone := agentSvc.WarmReadiness()
-		if cfg.HarnessUpdateChecks {
-			go func() {
-				defer sentryobs.RecoverBackground()
-				watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.EnsureInstallationReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
-					return systemInstall.UpdateAdvisory(ctx, target, refresh)
-				}, log)
-			}()
+		if !localLifecycleTest {
+			readinessDone := agentSvc.WarmReadiness()
+			if cfg.HarnessUpdateChecks {
+				go func() {
+					defer sentryobs.RecoverBackground()
+					watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.EnsureInstallationReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
+						return systemInstall.UpdateAdvisory(ctx, target, refresh)
+					}, log)
+				}()
+			}
 		}
 		done := make(chan struct{})
 		startupReconcileDone = done

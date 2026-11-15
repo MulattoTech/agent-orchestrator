@@ -49,7 +49,7 @@ export function resolveDaemonLaunch(
 	return {
 		command: joinPath(resourcesPath, "daemon", bundledDaemonBinaryName(platform)),
 		args: ["daemon"],
-		cwd: joinPath(homeDir, ".ao"),
+		cwd: env.AO_DATA_DIR?.trim() || joinPath(homeDir, ".ao"),
 		shell: false,
 		source: "bundled",
 	};

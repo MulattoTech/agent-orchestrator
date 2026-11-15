@@ -17,6 +17,12 @@ import path from "node:path";
 import { BUNDLED_TMUX_VERSION } from "./scripts/tmux-version.mjs";
 import { checkMacDmgLayout } from "./scripts/build-mac-dmg.mjs";
 
+// Owner-local builds are portable diagnostics only. In particular, never run
+// the upstream installer makers or publisher from this checkout.
+if (process.argv.some((argument) => argument === "make" || argument === "publish")) {
+	throw new Error("This unofficial lifecycle build supports package only; installer creation and publishing are disabled.");
+}
+
 // Default GitHub release target (production). Releases land on Untrivial-ai
 // (the org the repo was transferred to in July 2026; AgentWrapper and aoagents
 // are prior homes). Builds cut by CI must NOT rely on this fallback: the
@@ -29,8 +35,8 @@ const DEFAULT_RELEASE_REPO = "Untrivial-ai/agent-orchestrator";
 // names the exe/ELF from this, and the NSIS + deb makers must point their
 // shortcut/launcher at the SAME name. Drift here means a broken Start menu
 // shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
-const EXECUTABLE_NAME = "agent-orchestrator";
-export const WINDOWS_DISPLAY_NAME = "Orchestrator.inc";
+const EXECUTABLE_NAME = "ao-lifecycle-test";
+export const WINDOWS_DISPLAY_NAME = "AO Lifecycle Test (UNOFFICIAL)";
 const AUTH_PROTOCOL = {
 	name: "Orchestrator authentication callback",
 	schemes: ["ao-app"],
@@ -69,7 +75,7 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 // Packager app name. It sets the bundle filename ("<name>.app"), which the
 // installed path, updater, and `ao start` keep using, so it is not the label
 // people see in Finder.
-const PACKAGER_NAME = "Agent Orchestrator";
+const PACKAGER_NAME = "AO Lifecycle Test";
 
 // Finder uses the localized label only when the base display name matches the
 // bundle filename, but the packager defaults it to the executable name. Set it,
@@ -179,7 +185,7 @@ const config: ForgeConfig = {
 		// runtime dependency tree explicitly; AutoUnpackNativesPlugin then places
 		// the .node binary outside app.asar.
 		ignore: ignoreFromVitePackage,
-		appBundleId: "dev.agent-orchestrator.desktop",
+		appBundleId: "local.ao3921.lifecycle-test",
 		name: PACKAGER_NAME,
 		executableName: EXECUTABLE_NAME,
 		// Match the Windows installer without changing the executable name.
@@ -202,7 +208,7 @@ const config: ForgeConfig = {
 			NSSpeechRecognitionUsageDescription: "Orchestrator turns your speech into message text.",
 			NSMicrophoneUsageDescription: "Orchestrator uses the microphone for dictation and for tools you run in it.",
 		},
-		protocols: [AUTH_PROTOCOL],
+		protocols: [],
 		appCategoryType: "public.app-category.developer-tools",
 		// App icon. electron-packager appends the per-platform extension
 		// (.icns on macOS, .ico on Windows); Linux menu icons come from the

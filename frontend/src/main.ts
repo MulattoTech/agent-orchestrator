@@ -1,3 +1,5 @@
+import { lifecycleSandbox } from "./main/lifecycle-sandbox-bootstrap";
+import { lifecycleSandboxEnvironment } from "./main/lifecycle-sandbox-policy";
 import type { SideCloseRequest, SideCloseState } from "./shared/side-close";
 import { SideCloseRecovery, type SideSnapshotCoverage } from "./main/side-close";
 import { SideCloseController } from "./main/side-close-controller";
@@ -300,7 +302,7 @@ process.stderr.on("error", ignoreStdStreamError);
 
 // The name shown in window titles, the menu bar, the dock, and the About panel.
 // Packaged bundle and installer filenames are unchanged.
-const APP_DISPLAY_NAME = "Orchestrator.inc";
+const APP_DISPLAY_NAME = "AO Lifecycle Test (UNOFFICIAL)";
 
 // Must run before app ready so the About panel and default-menu role labels use it.
 // Unpackaged runs get a distinct name so the dev window, dock menu, and About
@@ -318,7 +320,7 @@ if (!app.isPackaged && process.platform === "darwin") {
 // Notification.isSupported() still returns true but show() silently drops the
 // toast, so notifications never appear. No-op on macOS/Linux.
 if (process.platform === "win32") {
-	app.setAppUserModelId("dev.agent-orchestrator.desktop");
+	app.setAppUserModelId("local.ao3921.lifecycle-test");
 }
 
 // Escape hatch for hosts whose GPU driver stack crashes Chromium on startup
@@ -351,9 +353,7 @@ if (disableGpu === "1" || disableGpu === "true" || disableGpu === "yes" || disab
 // are deliberately NOT overridable — their profile is part of the install.
 app.setPath(
 	"userData",
-	app.isPackaged
-		? path.join(os.homedir(), ".ao", "electron")
-		: (process.env.AO_DEV_ELECTRON_DIR ?? path.join(os.homedir(), ".ao", "dev", "electron")),
+	lifecycleSandbox.userData,
 );
 
 // Resolve once against the launch cwd, before the daemon can chdir. The exact
@@ -662,7 +662,7 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
 	app.exit(0);
 } else {
-	registerCloudProtocol();
+	if (!lifecycleSandbox) registerCloudProtocol();
 	installLifecycleLog();
 }
 
@@ -1029,7 +1029,7 @@ async function createWindowInternal(): Promise<void> {
 		// Agent Browser creates Unix sockets below each run root. Keep this base
 		// deliberately short so the namespace/session suffix stays below macOS's
 		// 103-byte sockaddr_un limit; all AO state remains under ~/.ao.
-		dataDir: path.join(os.homedir(), ".ao", ...(app.isPackaged ? ["br"] : ["dev", "br"])),
+		dataDir: lifecycleSandbox.browserData,
 		log: (message) => console.log(`AO: ${message}`),
 	});
 	await agentBrowserRuntime.prepare();
@@ -1811,7 +1811,7 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 	//
 	// AO_APP_RUN_ID scopes temporary command/auth terminals to this app launch.
 	// User-opened shells remain attachable across launches while their PTYs live.
-	const AO_OWNER = forceKeep ? "persistent" : "app";
+	const AO_OWNER = lifecycleSandbox ? "app" : forceKeep ? "persistent" : "app";
 	const bundledTmuxBinary = stagedBundledTmuxBinary;
 	const ownerTag = {
 		AO_OWNER,
@@ -1862,12 +1862,12 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 	// Windows keeps its native environment semantics while overlaying values
 	// exported by the selected login-shell probe.
 	if (process.platform === "win32") {
-		return { ...process.env, ...(cachedShellEnv ?? {}), ...devExtras, ...telemetryOverrides(), ...ownerTag };
+		return { ...process.env, ...(cachedShellEnv ?? {}), ...devExtras, ...telemetryOverrides(), ...ownerTag, ...lifecycleSandboxEnvironment(lifecycleSandbox) };
 	}
 	return buildDaemonEnv(
 		process.env,
 		cachedShellEnv,
-		{ ...devExtras, ...telemetryOverrides(), ...ownerTag },
+		{ ...devExtras, ...telemetryOverrides(), ...ownerTag, ...lifecycleSandboxEnvironment(lifecycleSandbox) },
 		configuredLoginShell,
 	);
 }
@@ -2153,6 +2153,7 @@ async function inspectExistingDaemon(
 }
 
 async function gracefullyReplaceDaemonForBrowser(status: DaemonStatus): Promise<void> {
+	if (lifecycleSandbox) throw new Error("This sandbox never takes over an existing daemon; stop its previous owned instance first.");
 	if (!status.port) throw new Error("the running daemon did not report a port");
 	const response = await fetch(`http://127.0.0.1:${status.port}/shutdown`, { method: "POST" });
 	if (!response.ok) throw new Error(`daemon shutdown returned HTTP ${response.status}`);
@@ -2180,6 +2181,10 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	if (!launch) return daemonStatus;
 	const existing = await inspectExistingDaemon(launch);
 	if (existing) {
+		if (lifecycleSandbox) {
+			setDaemonStatus({ state: "error", message: "An existing daemon was found. Stop the previous sandbox instance before starting another.", code: "not_ready" });
+			return daemonStatus;
+		}
 		if (!daemonAutoRestartStandDown && browserDaemonOwnershipDecision(appRunId, existing).action === "replace") {
 			return startDaemon({ trigger: "renderer_status" });
 		}
@@ -2343,6 +2348,10 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	}
 	if (existing) {
 		if (autoRestartIntent) return daemonStatus;
+		if (lifecycleSandbox) {
+			setDaemonStatus({ state: "error", message: "This sandbox refuses to adopt or replace an existing daemon.", code: "not_ready" });
+			return daemonStatus;
+		}
 		const ownership = browserDaemonOwnershipDecision(appRunId, existing);
 		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
 			lifecycleLog("daemon_replace", {
@@ -2397,6 +2406,10 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	}
 	if (directDaemon) {
 		if (autoRestartIntent) return daemonStatus;
+		if (lifecycleSandbox) {
+			setDaemonStatus({ state: "error", message: "The selected sandbox port is occupied by a daemon. No takeover was attempted.", code: "not_ready" });
+			return daemonStatus;
+		}
 		let portAttachOwner: string | undefined;
 		let portAttachAppRunId: string | undefined;
 		// Re-link iff the daemon is app-owned. Read the run-file for the owner tag;
@@ -2483,7 +2496,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		}
 	}
 	if (startCancelled() || (autoRestartIntent && orphanProbe)) return daemonStatus;
-	const holder = autoRestartIntent ? { pid: null, reason: "automatic recovery never signals a port holder" } : await portHolderPidToReplace({
+	const holder = (autoRestartIntent || lifecycleSandbox) ? { pid: null, reason: "sandbox and automatic recovery never signal a port holder" } : await portHolderPidToReplace({
 		probe: orphanProbe,
 		runFile,
 		processStartMs: readProcessStartMs,
@@ -2595,7 +2608,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// defeating the keep-alive. Redirect stdio to ~/.ao/daemon.log and unref the
 	// child so the parent does not wait on it. Port discovery then relies on the
 	// running.json handshake (the log pipe scan is skipped).
-	const keep = autoRestartIntent?.keepAlive ?? keepAliveOverride ?? replacementKeepAlive ?? keepDaemonAlive(process.env);
+	const keep = lifecycleSandbox ? false : autoRestartIntent?.keepAlive ?? keepAliveOverride ?? replacementKeepAlive ?? keepDaemonAlive(process.env);
 	// We are about to own the daemon and hand it this launch's runtime token, so
 	// any forced replacement has been honored and must not leak into a later
 	// startup in this process.
@@ -3127,7 +3140,7 @@ async function restartDaemon(): Promise<DaemonStatus> {
 	return startDaemonForRestart();
 }
 
-registerCliLinkIpc({
+if (!lifecycleSandbox) registerCliLinkIpc({
 	isPackaged: () => app.isPackaged,
 	resourcesPath: process.resourcesPath,
 	appImage: process.env.APPIMAGE,
@@ -3928,6 +3941,7 @@ ipcMain.handle("terminal:saveDroppedFile", async (_event, input: { name: string;
 });
 
 ipcMain.handle("appState:getMigration", async (): Promise<MigrationState> => {
+	if (lifecycleSandbox) return { status: "declined" };
 	const runFile = runFilePath();
 	if (!runFile) return { status: "pending" };
 	return readMigrationState(path.dirname(runFile));
@@ -3955,16 +3969,19 @@ ipcMain.handle("appState:markFirstRunProjectPromptSeen", async () => {
 });
 
 ipcMain.handle("updateSettings:get", async (): Promise<UpdateSettings> => {
+	if (lifecycleSandbox) return { enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false };
 	const runFile = runFilePath();
 	if (!runFile) return { enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false };
 	return readUpdateSettings(path.dirname(runFile));
 });
 ipcMain.handle("updateSettings:set", async (_event, settings: UpdateSettings) => {
+	if (lifecycleSandbox) throw new Error("Updates are disabled in this unofficial lifecycle test build.");
 	const runFile = runFilePath();
 	if (!runFile) return;
 	await setUpdateSettings(path.dirname(runFile), settings);
 });
 ipcMain.handle("updateSettings:setMacDifferentialUpdates", async (_event, enabled: unknown) => {
+	if (lifecycleSandbox) throw new Error("Updates are disabled in this unofficial lifecycle test build.");
 	if (typeof enabled !== "boolean") return;
 	const runFile = runFilePath();
 	if (!runFile) return;
@@ -4001,24 +4018,30 @@ ipcMain.handle("keybindings:setRecording", (event, active: unknown): void => {
 	keybindingRecordingActive = active;
 });
 
-ipcMain.handle("featureBuilds:list", () => listFeatureBuilds());
-ipcMain.handle("featureBuilds:getActive", () => getActiveFeatureBuild());
+ipcMain.handle("featureBuilds:list", () => lifecycleSandbox ? [] : listFeatureBuilds());
+ipcMain.handle("featureBuilds:getActive", () => lifecycleSandbox ? null : getActiveFeatureBuild());
 
-ipcMain.handle("updates:getStatus", (): UpdateStatus => getUpdateStatus());
+ipcMain.handle("updates:getStatus", (): UpdateStatus => lifecycleSandbox ? { state: "unsupported", message: "Updates are disabled in this unofficial lifecycle test build." } : getUpdateStatus());
 ipcMain.handle("updates:check", async (_event, options?: UpdateCheckOptions) => {
+	if (lifecycleSandbox) throw new Error("Updates are disabled in this unofficial lifecycle test build.");
 	const runFile = runFilePath();
 	if (!runFile) return;
 	await checkForUpdatesNow(path.dirname(runFile), options);
 });
 ipcMain.handle("updates:returnHome", async (_event, requestId?: string) => {
+	if (lifecycleSandbox) throw new Error("Updates are disabled in this unofficial lifecycle test build.");
 	const runFile = runFilePath();
 	if (!runFile) return;
 	await returnToHome(path.dirname(runFile), requestId);
 });
 ipcMain.handle("updates:download", async (_event, requestId?: string) => {
+	if (lifecycleSandbox) throw new Error("Updates are disabled in this unofficial lifecycle test build.");
 	await downloadUpdateNow(requestId);
 });
-ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAndInstallUpdate(confirmedVersion));
+ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => {
+	if (lifecycleSandbox) throw new Error("Updates are disabled in this unofficial lifecycle test build.");
+	return quitAndInstallUpdate(confirmedVersion);
+});
 // Retry after a failed macOS preparation: Squirrel can't reset a stalled staging
 // in-process, so restart AO like a manual quit-and-reopen. install-on-quit is
 // already off on the failed path, so quitting can't apply a half-prepared build.
@@ -4485,7 +4508,7 @@ app.on("second-instance", (_event, argv) => {
 // A live updater additionally requires a signed + notarized build — see
 // frontend/docs/desktop-release.md.
 function initAutoUpdates(): void {
-	if (!app.isPackaged) return;
+	if (lifecycleSandbox || !app.isPackaged) return;
 	const runFile = runFilePath();
 	if (!runFile) return;
 	const stateDir = path.dirname(runFile);
@@ -4564,7 +4587,7 @@ app.whenReady().then(async () => {
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
 	void refreshGitHubOwners();
-	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
+	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: false, platform: process.platform });
 	const policyController = new DesktopTelemetryController({
 		authority,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
@@ -4725,7 +4748,7 @@ app.whenReady().then(async () => {
 	if (browserQuitRequested) return;
 	// Not awaited: launch must not wait on this network fetch (up to 10 s). It
 	// runs once the window exists so its dialogs attach to it.
-	if (app.isPackaged) {
+	if (app.isPackaged && !lifecycleSandbox) {
 		void import("./main/desktop-version-floor")
 			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor({
 					parent: () => mainWindow,

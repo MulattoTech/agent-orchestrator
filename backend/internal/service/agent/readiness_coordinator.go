@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"sort"
 	"sync"
@@ -586,6 +587,16 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 }
 
 func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAgent, purpose domain.AgentReadinessPurpose) (observation domain.AgentAuthenticationObservation, failed bool) {
+	// Owner-local qualification only. Some adapters validate credentials by
+	// sending a one-token model prompt, including for display readiness. Keep
+	// every coordinator entry point process- and inference-free at this boundary.
+	if os.Getenv("AO_LOCAL_LIFECYCLE_TEST") == "1" {
+		return domain.AgentAuthenticationObservation{
+			State: domain.AgentAuthenticationUnknown, Freshness: domain.AgentReadinessStale,
+			ReasonCode: domain.AgentReadinessReasonNotChecked,
+			Reason:     "Authentication checks are disabled in this unofficial lifecycle test build.",
+		}, false
+	}
 	var diagnostics []domain.AgentAuthDiagnostic
 	evidenceCtx, evidence := ports.WithAuthEvidence(c.ctx)
 	if c.dataDir != "" {
