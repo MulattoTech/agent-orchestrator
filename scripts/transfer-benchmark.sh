@@ -15,11 +15,20 @@
 #
 # Exit codes: 0 pass, 1 budget or semantic failure, 2 invalid, incomparable,
 # failed replay or setup failure. See docs/performance/thread-transfer-benchmark.md.
-set -euo pipefail
+set -Eeuo pipefail
+# Exit 1 is reserved for a comparison that found a failure. Any setup step
+# that fails (a build, the export, an overlay or tree check) exits 2.
+trap 'exit 2' ERR
 
 usage() {
 	sed -n '2,6p' "$0" >&2
 	exit 2
+}
+
+# value returns an option's argument, or stops with usage when it is missing.
+value() {
+	[[ $# -ge 2 && -n "$2" && "$2" != --* ]] || usage
+	printf '%s' "$2"
 }
 
 baseline_ref=""
@@ -29,9 +38,9 @@ allow_client_change=""
 keep_work=""
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-	--baseline-ref) baseline_ref="${2:?}"; shift 2 ;;
-	--out-dir) out_dir="${2:?}"; shift 2 ;;
-	--ceilings) ceilings="${2:?}"; shift 2 ;;
+	--baseline-ref) baseline_ref="$(value "$@")"; shift 2 ;;
+	--out-dir) out_dir="$(value "$@")"; shift 2 ;;
+	--ceilings) ceilings="$(value "$@")"; shift 2 ;;
 	--allow-client-change) allow_client_change="--allow-client-change"; shift ;;
 	--keep-work) keep_work=1; shift ;;
 	*) usage ;;

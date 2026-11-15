@@ -494,6 +494,9 @@ func (w *benchWorld) inspectAll() benchPage {
 		if !page.HasMoreBefore {
 			break
 		}
+		if page.OldestSequence <= 0 || (before > 0 && page.OldestSequence >= before) {
+			w.t.Fatalf("inspect conversation: the page before %d reports more history from %d; the cursor did not move back", before, page.OldestSequence)
+		}
 		before = page.OldestSequence
 	}
 	return mergeBenchPages(pages)
@@ -960,9 +963,20 @@ func (c *benchClient) fetch(query url.Values) benchPage {
 func (c *benchClient) openChat() { c.pages = []benchPage{c.fetch(c.pageQuery(0))} }
 
 // loadOlder is fetchNextPage with getNextPageParam = oldestSequence.
+// loadOlder reads the page before the oldest one.
 func (c *benchClient) loadOlder() {
-	oldest := c.pages[len(c.pages)-1]
-	c.pages = append(c.pages, c.fetch(c.pageQuery(oldest.OldestSequence)))
+	c.pages = append(c.pages, c.fetchOlder(c.pages[len(c.pages)-1].OldestSequence))
+}
+
+// fetchOlder reads the page before a cursor. A page that still reports more
+// history must move the cursor back, or paging would repeat or never end.
+func (c *benchClient) fetchOlder(before int64) benchPage {
+	c.w.t.Helper()
+	page := c.fetch(c.pageQuery(before))
+	if page.HasMoreBefore && (page.OldestSequence <= 0 || page.OldestSequence >= before) {
+		c.w.t.Fatalf("the page before %d reports more history from %d; the cursor did not move back", before, page.OldestSequence)
+	}
+	return page
 }
 
 func (c *benchClient) view() benchPage { return mergeBenchPages(c.pages) }
@@ -1129,7 +1143,7 @@ func (c *benchClient) refresh() {
 		c.record(map[string]any{"type": "refresh", "mode": "local-refetch", "pages": len(c.pages)})
 		next := []benchPage{c.fetch(c.pageQuery(0))}
 		for len(next) < len(c.pages) && next[len(next)-1].HasMoreBefore {
-			next = append(next, c.fetch(c.pageQuery(next[len(next)-1].OldestSequence)))
+			next = append(next, c.fetchOlder(next[len(next)-1].OldestSequence))
 		}
 		c.pages = next
 		return

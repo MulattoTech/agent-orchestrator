@@ -1,6 +1,6 @@
 {
   "schemaVersion": "ao.transferbench.ceilings.v1",
-  "fixturesSha256": "6f1c93df044e19851ff93c45967464d8ee756a5eb349e2fb0b9294984a8d7c58",
+  "fixturesSha256": "b515ad9c7e5721d672b9db230566400f4d087bd11729896c66a45de560f65bbf",
   "maxIncreasePermille": 20,
   "rows": [
     {

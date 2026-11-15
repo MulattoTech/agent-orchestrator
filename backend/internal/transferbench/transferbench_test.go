@@ -354,3 +354,29 @@ func TestCanonicalPayloadKeepsToolContentOnly(t *testing.T) {
 		t.Fatalf("a missing detail has payload %q", got)
 	}
 }
+
+// The reviewed ceilings name the fixture set they budget. Regenerated expected
+// states change that set, so the ceilings must be reviewed and rebound with
+// them; otherwise every benchmark run is refused as incomparable.
+func TestCeilingsBindTheCommittedFixtures(t *testing.T) {
+	data, err := os.ReadFile("ceilings.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ceilings, err := transferbench.DecodeCeilings(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join("..", "..", "..")
+	fixtures, err := transferbench.DirectoryDigests(root, transferbench.FixturesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := transferbench.DirectoryDigests(root, transferbench.ExpectedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := transferbench.ListDigest(append(fixtures, expected...)); got != ceilings.FixturesSha256 {
+		t.Fatalf("ceilings.json is bound to fixtures %s, but the committed fixtures and expected states are %s", ceilings.FixturesSha256, got)
+	}
+}
