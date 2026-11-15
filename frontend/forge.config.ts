@@ -188,6 +188,10 @@ const config: ForgeConfig = {
 		appBundleId: "local.ao3921.lifecycle-test",
 		name: PACKAGER_NAME,
 		executableName: EXECUTABLE_NAME,
+		// Windows PE version resources require numeric components. Keep the
+		// descriptive prerelease version in package.json and the app UI.
+		appVersion: "0.15.1",
+		buildVersion: "0.15.1.3921",
 		// Match the Windows installer without changing the executable name.
 		win32metadata: {
 			FileDescription: WINDOWS_DISPLAY_NAME,
