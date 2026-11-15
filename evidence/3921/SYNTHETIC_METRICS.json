@@ -1,0 +1,194 @@
+{
+  "format_version": 1,
+  "classification": "SYNTHETIC_REPRODUCED",
+  "purpose": "Selected public-review measurements from three distinct fixtures; no real-provider capacity claim.",
+  "restore_admission": {
+    "fixture": "Public service regression with fake manager/store",
+    "baseline_sha": "53a545ad20fcd300c7c989f175f9a5c5d90fe58e",
+    "candidate_sha": "3dcec6549cd56d2bd7943f6c18e904ef633058c2",
+    "requests": [
+      1,
+      4,
+      8,
+      16,
+      32,
+      40,
+      64
+    ],
+    "baseline_successful_restores": [
+      1,
+      4,
+      8,
+      16,
+      32,
+      40,
+      64
+    ],
+    "candidate_successful_restores": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "baseline_status": "EXPECTED_FAIL",
+    "baseline_package_seconds": 0.022,
+    "candidate_status": "PASS",
+    "candidate_package_seconds": 0.192,
+    "linux_race": {
+      "status": "PASS",
+      "repetitions": 20,
+      "package_seconds": 7.673
+    },
+    "windows_amd64": {
+      "status": "PASS",
+      "repetitions": 20,
+      "race_detector": false,
+      "package_seconds": 3.292
+    },
+    "real_agent_processes": 0,
+    "model_turns": 0,
+    "test_fixture_sha256": "d6bfef9f0e8619d3953c8d8c332ec2d94c868d086ab49fca2331c0b0b5f01f84"
+  },
+  "native_manager_sqlite_fixture": {
+    "platform": "windows/amd64",
+    "status": "PASS",
+    "package_seconds": 5.986,
+    "race_detector": false,
+    "local_source_sha": "1ef31a7955bb078a101ffdab6a2abb9fc976a250",
+    "production_manager_source": "https://github.com/OrchestratorInc/agent-orchestrator/blob/53a545ad20fcd300c7c989f175f9a5c5d90fe58e/backend/internal/session_manager/manager.go",
+    "fixture_sha256": "0dcfed0216627707b83d36c9cce5ddfc209c7c996123bad3c8cfd894bb4183fd",
+    "fixture_in_public_pr": false,
+    "scope": "Actual Manager/reducer/temp SQLite; fake runtime handles and plain-directory workspace adapter. Independent stages, one additional injected failed launch per stage.",
+    "reopen_scope": "Clean SQLite close/reopen and fresh Manager/reducer with retained fake adapter state; explicit restore. No OS crash or daemon restart.",
+    "columns": [
+      "submitted",
+      "accepted",
+      "final_session_rows",
+      "peak_inflight_spawn_calls",
+      "peak_live_fake_runtimes",
+      "elapsed_ms",
+      "sampled_peak_go_heap_bytes",
+      "retained_temp_disk_bytes"
+    ],
+    "rows": [
+      [
+        1,
+        1,
+        1,
+        1,
+        1,
+        730,
+        19066016,
+        1310752
+      ],
+      [
+        4,
+        4,
+        4,
+        4,
+        4,
+        684,
+        25743600,
+        1310752
+      ],
+      [
+        8,
+        8,
+        8,
+        8,
+        8,
+        709,
+        26232896,
+        1318944
+      ],
+      [
+        16,
+        16,
+        16,
+        16,
+        16,
+        796,
+        26680192,
+        1331232
+      ],
+      [
+        32,
+        32,
+        32,
+        32,
+        32,
+        867,
+        27300832,
+        1368096
+      ],
+      [
+        40,
+        40,
+        40,
+        40,
+        40,
+        936,
+        29407784,
+        1380384
+      ],
+      [
+        64,
+        64,
+        64,
+        64,
+        64,
+        1007,
+        27006864,
+        1437728
+      ]
+    ],
+    "common_per_stage_assertions": {
+      "injected_failed_launches": 1,
+      "reopened_db_restores": 1,
+      "final_live_fake_runtimes": 0,
+      "dirty_content_preserved": true,
+      "unowned_fake_runtime_preserved": true,
+      "force_destroy_calls": 0,
+      "model_turns": 0,
+      "real_agent_processes": 0
+    },
+    "resource_limits": "Go heap samples cover the whole sequential test process, not per-agent RSS. Disk bytes are final retained test data, not peak use. OS RSS/CPU/handle counts were not measured."
+  },
+  "native_renderer_fixture": {
+    "platform": "windows/amd64",
+    "browser": "Microsoft Edge, temporary profile",
+    "status": "PASS_SCOPED",
+    "tests_passed": 1,
+    "runner_duration_ms": 10029.094,
+    "local_source_sha": "1810dcde8e8c74a5596b538e5008b3ed3ae7fc06",
+    "fake_bridge_source": "https://github.com/OrchestratorInc/agent-orchestrator/blob/53a545ad20fcd300c7c989f175f9a5c5d90fe58e/frontend/e2e/support/fake-bridge.ts",
+    "unique_worker_dom_ids": 64,
+    "fake_sse_status_moves": 2,
+    "mocked_api_requests": 266,
+    "uncaught_page_errors": 0,
+    "model_turns": 0,
+    "real_agent_processes": 0,
+    "real_daemon_calls": 0,
+    "owned_processes_and_test_listener_gone": true,
+    "warnings": [
+      "Vite mixed named/default exports",
+      "Undefined query data from generic fixture mocks"
+    ],
+    "scope": "Standalone dev renderer with fake bridge/EventSource and mocked page APIs; not packaged desktop, live API integration, daemon lifecycle or provider load."
+  },
+  "final_packaging_revision": {
+    "sha": "5a34a629f75b446b653e387e454bfd1b70658036",
+    "scope": "Final owner-local package source, not part of PR #8456. The numerical fixture results above retain their historical source identities. A separate limited HOST_OBSERVED lifecycle/UI summary appears in the proposed comment and public evidence document; native Electron better-sqlite3 Database construction remains UNVERIFIED."
+  },
+  "unverified": [
+    "Original macOS incident cause",
+    "Native Windows crash cause",
+    "Global worker or model-turn admission cap",
+    "Real 64-provider concurrency",
+    "Abrupt-crash recovery or full process-tree containment",
+    "Complete repository qualification"
+  ]
+}

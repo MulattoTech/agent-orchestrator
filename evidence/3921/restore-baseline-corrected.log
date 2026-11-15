@@ -1,0 +1,85 @@
+=== RUN   TestRestoreOrchestratorRejectsAnotherActiveOrchestrator
+=== RUN   TestRestoreOrchestratorRejectsAnotherActiveOrchestrator/tui
+    orchestrator_restore_test.go:166: restore error = <nil>, want ORCHESTRATOR_ALREADY_ACTIVE conflict
+=== RUN   TestRestoreOrchestratorRejectsAnotherActiveOrchestrator/chat
+    orchestrator_restore_test.go:166: restore error = <nil>, want ORCHESTRATOR_ALREADY_ACTIVE conflict
+--- FAIL: TestRestoreOrchestratorRejectsAnotherActiveOrchestrator (0.00s)
+    --- FAIL: TestRestoreOrchestratorRejectsAnotherActiveOrchestrator/tui (0.00s)
+    --- FAIL: TestRestoreOrchestratorRejectsAnotherActiveOrchestrator/chat (0.00s)
+=== RUN   TestRestoreOrchestratorConcurrentAdmission
+=== RUN   TestRestoreOrchestratorConcurrentAdmission/1
+=== RUN   TestRestoreOrchestratorConcurrentAdmission/4
+    orchestrator_restore_test.go:203: 4 requests: successful restores=4, launches=4; want one each
+=== RUN   TestRestoreOrchestratorConcurrentAdmission/8
+    orchestrator_restore_test.go:203: 8 requests: successful restores=8, launches=8; want one each
+=== RUN   TestRestoreOrchestratorConcurrentAdmission/16
+    orchestrator_restore_test.go:203: 16 requests: successful restores=16, launches=16; want one each
+=== RUN   TestRestoreOrchestratorConcurrentAdmission/32
+    orchestrator_restore_test.go:203: 32 requests: successful restores=32, launches=32; want one each
+=== RUN   TestRestoreOrchestratorConcurrentAdmission/40
+    orchestrator_restore_test.go:203: 40 requests: successful restores=40, launches=40; want one each
+=== RUN   TestRestoreOrchestratorConcurrentAdmission/64
+    orchestrator_restore_test.go:203: 64 requests: successful restores=64, launches=64; want one each
+--- FAIL: TestRestoreOrchestratorConcurrentAdmission (0.01s)
+    --- PASS: TestRestoreOrchestratorConcurrentAdmission/1 (0.00s)
+    --- FAIL: TestRestoreOrchestratorConcurrentAdmission/4 (0.00s)
+    --- FAIL: TestRestoreOrchestratorConcurrentAdmission/8 (0.00s)
+    --- FAIL: TestRestoreOrchestratorConcurrentAdmission/16 (0.00s)
+    --- FAIL: TestRestoreOrchestratorConcurrentAdmission/32 (0.00s)
+    --- FAIL: TestRestoreOrchestratorConcurrentAdmission/40 (0.00s)
+    --- FAIL: TestRestoreOrchestratorConcurrentAdmission/64 (0.00s)
+=== RUN   TestRestoreOrchestratorSharesSpawnAdmission
+=== RUN   TestRestoreOrchestratorSharesSpawnAdmission/generic=false
+    orchestrator_restore_test.go:237: restore error = <nil>, want ORCHESTRATOR_ALREADY_ACTIVE conflict
+=== RUN   TestRestoreOrchestratorSharesSpawnAdmission/generic=true
+    orchestrator_restore_test.go:237: restore error = <nil>, want ORCHESTRATOR_ALREADY_ACTIVE conflict
+--- FAIL: TestRestoreOrchestratorSharesSpawnAdmission (0.00s)
+    --- FAIL: TestRestoreOrchestratorSharesSpawnAdmission/generic=false (0.00s)
+    --- FAIL: TestRestoreOrchestratorSharesSpawnAdmission/generic=true (0.00s)
+=== RUN   TestRestoreOrchestratorHoldsAdmissionUntilPublished
+=== RUN   TestRestoreOrchestratorHoldsAdmissionUntilPublished/generic
+    orchestrator_restore_test.go:283: spawn bypassed an in-flight restore before its session was published
+    orchestrator_restore_test.go:299: spawn returned new with 1 launches; want old with 0
+=== RUN   TestRestoreOrchestratorHoldsAdmissionUntilPublished/orchestrator
+    orchestrator_restore_test.go:283: spawn bypassed an in-flight restore before its session was published
+    orchestrator_restore_test.go:299: spawn returned new with 1 launches; want old with 0
+=== RUN   TestRestoreOrchestratorHoldsAdmissionUntilPublished/clean_replacement
+    orchestrator_restore_test.go:283: spawn bypassed an in-flight restore before its session was published
+--- FAIL: TestRestoreOrchestratorHoldsAdmissionUntilPublished (0.00s)
+    --- FAIL: TestRestoreOrchestratorHoldsAdmissionUntilPublished/generic (0.00s)
+    --- FAIL: TestRestoreOrchestratorHoldsAdmissionUntilPublished/orchestrator (0.00s)
+    --- FAIL: TestRestoreOrchestratorHoldsAdmissionUntilPublished/clean_replacement (0.00s)
+=== RUN   TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged
+=== RUN   TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged/worker
+=== RUN   TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged/other_project
+=== RUN   TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged/newer_terminated
+=== RUN   TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged/same_live_session
+=== RUN   TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged/missing_session
+--- PASS: TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged (0.00s)
+    --- PASS: TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged/worker (0.00s)
+    --- PASS: TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged/other_project (0.00s)
+    --- PASS: TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged/newer_terminated (0.00s)
+    --- PASS: TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged/same_live_session (0.00s)
+    --- PASS: TestRestoreOrchestratorAdmissionLeavesOtherRestoresUnchanged/missing_session (0.00s)
+=== RUN   TestRestoreOrchestratorAdmissionReleasesAfterFailure
+=== RUN   TestRestoreOrchestratorAdmissionReleasesAfterFailure/launch_failed
+=== RUN   TestRestoreOrchestratorAdmissionReleasesAfterFailure/context_canceled
+=== RUN   TestRestoreOrchestratorAdmissionReleasesAfterFailure/context_deadline_exceeded
+--- PASS: TestRestoreOrchestratorAdmissionReleasesAfterFailure (0.00s)
+    --- PASS: TestRestoreOrchestratorAdmissionReleasesAfterFailure/launch_failed (0.00s)
+    --- PASS: TestRestoreOrchestratorAdmissionReleasesAfterFailure/context_canceled (0.00s)
+    --- PASS: TestRestoreOrchestratorAdmissionReleasesAfterFailure/context_deadline_exceeded (0.00s)
+=== RUN   TestRestoreOrchestratorAdmissionFailsClosedOnStoreErrors
+=== RUN   TestRestoreOrchestratorAdmissionFailsClosedOnStoreErrors/get
+    orchestrator_restore_test.go:388: manager restore calls = 1 after unverified admission
+=== RUN   TestRestoreOrchestratorAdmissionFailsClosedOnStoreErrors/list
+    orchestrator_restore_test.go:385: restore error = <nil>, want storage failure
+--- FAIL: TestRestoreOrchestratorAdmissionFailsClosedOnStoreErrors (0.00s)
+    --- FAIL: TestRestoreOrchestratorAdmissionFailsClosedOnStoreErrors/get (0.00s)
+    --- FAIL: TestRestoreOrchestratorAdmissionFailsClosedOnStoreErrors/list (0.00s)
+=== RUN   TestRestoreOrchestratorAdmissionDoesNotLaunchCancelledRequest
+    orchestrator_restore_test.go:404: cancelled restore error = <nil>, want cancellation
+--- FAIL: TestRestoreOrchestratorAdmissionDoesNotLaunchCancelledRequest (0.00s)
+FAIL
+FAIL	github.com/aoagents/agent-orchestrator/backend/internal/service/session	0.022s
+FAIL
