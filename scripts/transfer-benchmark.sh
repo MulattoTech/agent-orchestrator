@@ -13,8 +13,8 @@
 # fixtures, toolchain and Go settings; the comparator then checks both runs
 # against the reviewed ceilings file.
 #
-# Exit codes: 0 pass, 1 budget or semantic failure, 2 invalid, incomparable or
-# setup failure. See docs/performance/thread-transfer-benchmark.md.
+# Exit codes: 0 pass, 1 budget or semantic failure, 2 invalid, incomparable,
+# failed replay or setup failure. See docs/performance/thread-transfer-benchmark.md.
 set -euo pipefail
 
 usage() {
@@ -37,6 +37,17 @@ while [[ $# -gt 0 ]]; do
 	*) usage ;;
 	esac
 done
+
+# Relative --out-dir and --ceilings name paths from the caller's directory.
+caller="$(pwd -P)"
+absolute() {
+	case "$1" in
+	/*) printf '%s' "$1" ;;
+	*) printf '%s/%s' "$caller" "$1" ;;
+	esac
+}
+[[ -z "$out_dir" ]] || out_dir="$(absolute "$out_dir")"
+[[ -z "$ceilings" ]] || ceilings="$(absolute "$ceilings")"
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo"
@@ -86,6 +97,8 @@ out_dir="${out_dir:-$tmp_root/ao-transferbench-results/$(date -u +%Y%m%dT%H%M%SZ
 baseline_root="$tmp_root/ao-transferbench-baseline/$base_sha"
 rm -rf "$baseline_root"
 mkdir -p "$out_dir" "$baseline_root" "$work/bin" "$work/gotmp"
+# A reused --out-dir must never hand an earlier run's results to this one.
+rm -f "$out_dir"/{baseline,candidate}.{json,log} "$out_dir"/report.{json,md}
 
 # One Go configuration for every step: no workspace file, no toolchain or
 # module downloads, read-only module graph, private temporary build output.
@@ -111,18 +124,19 @@ run_side() {
 	[[ -d "$module_dir" && "$(cd "$module_dir" && pwd -P)" == "$(cd "$root/backend" && pwd -P)" ]] ||
 		fail "$side compiles module $module_dir, not $root/backend"
 	echo "running $side harness in $root/backend"
-	local status=0
+	local artifact="$out_dir/$side.json" status=0
+	rm -f "$artifact"
 	(cd "$root/backend" && "${go_env[@]}" \
-		AO_TRANSFERBENCH_OUT="$out_dir/$side.json" AO_TRANSFERBENCH_SIDE="$side" \
+		AO_TRANSFERBENCH_OUT="$artifact" AO_TRANSFERBENCH_SIDE="$side" \
 		AO_TRANSFERBENCH_SOURCE_REF="$ref" AO_TRANSFERBENCH_DIRTY_DIFF_SHA256="$dirty" \
 		AO_TRANSFERBENCH_CEILINGS_SHA256="$ceilings_sha" \
 		go test -count=1 -p 1 -timeout 15m -run '^TestTransferBenchmark$' ./internal/httpd/ >"$out_dir/$side.log" 2>&1) || status=$?
-	if [[ ! -s "$out_dir/$side.json" ]]; then
+	# The harness carries semantic differences inside the artifact and passes;
+	# it fails, and writes no artifact, only when the replay itself broke an
+	# invariant or could not run. Either way there is nothing valid to compare.
+	if [[ $status -ne 0 || ! -s "$artifact" ]]; then
 		tail -n 40 "$out_dir/$side.log" >&2
-		fail "$side harness wrote no run artifact"
-	fi
-	if [[ $status -ne 0 ]]; then
-		echo "$side harness reported failures (see $out_dir/$side.log); comparing its artifact anyway" >&2
+		fail "$side harness failed (exit $status, see $out_dir/$side.log); no comparison"
 	fi
 }
 

@@ -3,7 +3,8 @@
 
 Derives, from the committed fixtures alone, the canonical state the daemon must
 reproduce: every history row (kind, role or activity kind, status, sha256 of its
-text, output size) and every remote-cut tool output (sha256 and size). It is an
+text, output size, and sha256 of its tool payload and whole output) and every
+remote-cut tool output (sha256 and size). It is an
 independent re-implementation of the fixture rules in
 backend/internal/transferbench/fixture.go, so an expected state generated from
 the product can be checked against something the product did not produce.
@@ -31,6 +32,15 @@ def sha(text):
 
 def size(text):
     return len(text.encode("utf-8"))
+
+
+def canonical_payload(detail):
+    """An activity detail without output, outputBytes and text, as compact JSON
+    with sorted keys: the bytes transferbench.CanonicalPayload renders."""
+    rest = {k: v for k, v in (detail or {}).items() if k not in ("output", "outputBytes", "text")}
+    if not rest:
+        return ""
+    return json.dumps(rest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def expand(template, number):
@@ -105,14 +115,19 @@ def turn_rows(turn):
         if it["message"]:
             rows.append(("message", "assistant", it["text"], 0))
             continue
-        detail = it["detail"] or {}
+        detail = dict(it["detail"] or {})
+        if it["streamed"]:
+            # Documented display rule (controllers.activityDetailPayload): streamed
+            # command output wins over the provider's aggregate, and says so.
+            detail.update(output=it["streamed"], outputSource="stream", outputMayBePartial=True)
+            detail.pop("outputTruncated", None)
         text = it["summary"]
         if isinstance(detail.get("text"), str):
             text += "\x00" + detail["text"]
         elif it["settled"] and it["kind"] == "reasoning":
             text += "\x00" + it["settled"]
-        output = detail["output"] if isinstance(detail.get("output"), str) else it["streamed"]
-        rows.append(("activity", it["kind"], text, size(output), it["status"]))
+        output = detail["output"] if isinstance(detail.get("output"), str) else ""
+        rows.append(("activity", it["kind"], text, size(output), it["status"], canonical_payload(detail), output))
         outputs.append((it["kind"], it["status"], output))
     return state, rows, outputs
 
@@ -123,7 +138,7 @@ def canonical(turn_states, rows):
         if row[0] == "message":
             lines.append("message\t%s\t%s\t%d\n" % (row[1], sha(row[2]), size(row[2])))
         else:
-            lines.append("activity\t%s\t%s\t%s\t%d\n" % (row[1], row[4], sha(row[2]), row[3]))
+            lines.append("activity\t%s\t%s\t%s\t%d\t%s\t%s\n" % (row[1], row[4], sha(row[2]), row[3], sha(row[5]), sha(row[6])))
     return "".join(lines)
 
 
@@ -143,7 +158,7 @@ def oracle(provider, output_limit):
         if cut:
             cut_states.append(state)
         for kind, status, output in cut:
-            cut_rows.append(("activity", kind, output, size(output), status))
+            cut_rows.append(("activity", kind, output, size(output), status, "", ""))
     files["oracle-%s-history.txt" % provider] = canonical(states, rows)
     files["oracle-%s-expand.txt" % provider] = canonical(cut_states, cut_rows)
     state, rows, _ = turn_rows(live)

@@ -19,10 +19,13 @@ scripts/transfer-benchmark.sh --out-dir /tmp/tb     # where run, report and log 
 
 It prints the Markdown report and writes `baseline.json`, `candidate.json`,
 `report.json`, `report.md`, and both harness logs to the output directory
-(default `$TMPDIR/ao-transferbench-results/<UTC time>`).
+(default `$TMPDIR/ao-transferbench-results/<UTC time>`). Relative `--out-dir`
+and `--ceilings` paths are taken from the directory you run it in. Each run
+first deletes those files from the output directory, so a reused directory
+never hands an earlier run's results to this one.
 
 Exit codes: `0` pass, `1` a ceiling, relative cap, or semantic check failed,
-`2` invalid input, incomparable runs, or setup failure.
+`2` invalid input, incomparable runs, a failed replay, or setup failure.
 
 To replay the harness alone, as an ordinary test:
 
@@ -153,27 +156,53 @@ than the provider's gap between units. Real coalescing can only lower them.
 
 Bytes cannot pass by losing content. Each scenario reduces the client's
 reconstructed view and a fresh, unpaged server read over the same window to a
-canonical text: ordered rows (kind, role or activity kind, status, sha256 of
-message text or activity summary plus settled detail text, output size) and the
-states of the turns they belong to. Then:
+canonical text: ordered rows and the states of the turns they belong to. A
+message row holds its role and the sha256 and size of its text. An activity row
+holds its kind and status, and four values:
 
-- the server text must match the fixture-only oracle that
+- the sha256 of its summary plus settled detail text;
+- its full output size;
+- the sha256 of its tool payload: the detail without `output`, `outputBytes`
+  and `text`, as compact sorted JSON. This covers file changes and patches,
+  content blocks, inputs, arguments and results;
+- the sha256 of the output the reader holds.
+
+On `remote-lan` that last value is the head-and-tail preview a page keeps of a
+cut output. The client view is reduced exactly as received. The server read
+holds whole outputs, so it is reduced with `transferbench.OutputPreview`, an
+independent statement of the documented `outputLimit` rule. A missing, empty or
+wrong preview therefore differs. Then:
+
+- the server text, with whole outputs, must match the fixture-only oracle that
   `scripts/transfer-benchmark-oracle.py` derives without running the product
   (`testdata/expected/oracle-*.txt`): the whole history and every cut output
-  exactly, and the live turn's rows as the view's final rows. The oracle is an
+  exactly, and the live turn's rows as the view's final rows. Both sides apply
+  the daemon's documented display rule for streamed command output
+  (`activityDetailPayload`). The streamed text is served as `output`, with
+  `outputSource: "stream"` and `outputMayBePartial: true`. The oracle is an
   independent Python re-implementation of the fixture rules, so an expected
   state can never be blessed from product output alone;
 - the server text must equal the committed expected state
   (`backend/internal/transferbench/testdata/expected/*.txt`);
 - the client text must equal the server text;
 - every message and activity the fixture produces must appear (whole history,
-  or the live turn when the view is a bounded page), and every full output in
-  the view must be one the fixture produced;
+  or the live turn when the view is a bounded page). Each must match the
+  fixture's tool payload, and the output or remote preview derived from the
+  fixture. Every full output in the view must be one the fixture produced;
 - cut remote outputs must report `outputBytes` equal to the full size, and
   expanding them must return exactly the fixture output.
 
-A mismatch fails the harness and poisons the run's `clientDigest`, so a
-comparison reports `candidate-state-mismatch` (exit 1) even if bytes fell.
+A mismatch poisons the run's `clientDigest`, so a comparison reports
+`candidate-state-mismatch` (exit 1) even if bytes fell. Run alone, the harness
+fails on it. With an output path, it logs the difference and lets the artifact
+carry it.
+
+Any other harness failure means the replay itself broke an invariant. Examples:
+SSE frames not equal to change rows plus the cursor frame, a row written after
+a step barrier, a remote history that fits one page, or an expanded output of
+the wrong size. In that case the harness writes no artifact. The runner treats
+any non-zero harness exit, or a missing artifact, as an invalid run (exit 2),
+so a broken replay can never pass.
 
 Expected states change only when regenerated explicitly with
 `AO_TRANSFERBENCH_UPDATE_EXPECTED=1`, never by the runner.

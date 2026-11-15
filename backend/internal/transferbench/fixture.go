@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Fixture is one provider's scripted conversation. Fixtures are reviewed,
@@ -175,15 +176,23 @@ func expand(t TurnTemplate, n int) Turn {
 }
 
 // CanonicalRow is one timeline row reduced to what a reader sees: its kind,
-// role or activity kind, status, a digest of its text, and the size of any
-// command output.
+// role or activity kind, status, a digest of its text, the full size of any
+// command output, and for activities digests of the tool payload and of the
+// output the reader holds.
 type CanonicalRow struct {
 	Kind         string // "message" or "activity"
 	Role         string
 	ActivityKind string
 	Status       string
-	Text         string // message text, or activity summary
-	OutputBytes  int64
+	Text         string // message text, or activity summary plus settled detail text
+	OutputBytes  int64  // the full output size, even when the reader holds a preview
+	// Payload is the activity's detail without output, outputBytes and text,
+	// as CanonicalPayload renders it: file changes and patches, content
+	// blocks, inputs, arguments and results.
+	Payload string
+	// Output is the output the reader holds: the whole output, or the head and
+	// tail a page kept of a cut one.
+	Output string
 }
 
 // CanonicalState renders rows (in sequence order) and turn states (in request
@@ -198,8 +207,56 @@ func CanonicalState(rows []CanonicalRow, turnStates []string) string {
 		case "message":
 			fmt.Fprintf(&b, "message\t%s\t%s\t%d\n", row.Role, SHA256Hex([]byte(row.Text)), len(row.Text))
 		default:
-			fmt.Fprintf(&b, "activity\t%s\t%s\t%s\t%d\n", row.ActivityKind, row.Status, SHA256Hex([]byte(row.Text)), row.OutputBytes)
+			fmt.Fprintf(&b, "activity\t%s\t%s\t%s\t%d\t%s\t%s\n", row.ActivityKind, row.Status, SHA256Hex([]byte(row.Text)), row.OutputBytes,
+				SHA256Hex([]byte(row.Payload)), SHA256Hex([]byte(row.Output)))
 		}
 	}
 	return b.String()
+}
+
+// CanonicalPayload renders an activity detail without output, outputBytes and
+// text as compact JSON with sorted keys and no HTML escaping, or "" when
+// nothing else is left. scripts/transfer-benchmark-oracle.py renders the same
+// bytes from the fixtures.
+func CanonicalPayload(detail map[string]any) string {
+	rest := make(map[string]any, len(detail))
+	for key, value := range detail {
+		switch key {
+		case "output", "outputBytes", "text":
+		default:
+			rest[key] = value
+		}
+	}
+	if len(rest) == 0 {
+		return ""
+	}
+	var b bytes.Buffer
+	encoder := json.NewEncoder(&b)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(rest); err != nil {
+		// Decoded JSON always encodes; an error still must not match anything.
+		return "unencodable payload: " + err.Error()
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// OutputPreview is what a page with this output limit keeps of an output: the
+// whole output when it fits, else its first limit/2 bytes and its last
+// limit-limit/2 bytes, both moved to UTF-8 boundaries, joined by an elision
+// line. It follows the documented outputLimit contract independently of the
+// daemon's code, so the benchmark can hold a cut preview to it. A zero limit
+// keeps everything.
+func OutputPreview(output string, limit int64) string {
+	if limit <= 0 || int64(len(output)) <= limit {
+		return output
+	}
+	head := int(limit / 2)
+	for head > 0 && !utf8.RuneStart(output[head]) {
+		head--
+	}
+	tail := len(output) - (int(limit) - head)
+	for tail < len(output) && !utf8.RuneStart(output[tail]) {
+		tail++
+	}
+	return output[:head] + "\n…\n" + output[tail:]
 }

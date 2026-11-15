@@ -317,3 +317,40 @@ func hasReason(report transferbench.Report, code, metric string) bool {
 	}
 	return false
 }
+
+func TestOutputPreviewKeepsHeadAndTailOnRuneBoundaries(t *testing.T) {
+	if got := transferbench.OutputPreview("short", 64); got != "short" {
+		t.Fatalf("an output that fits was changed: %q", got)
+	}
+	if got := transferbench.OutputPreview(strings.Repeat("x", 100), 0); len(got) != 100 {
+		t.Fatalf("a zero limit cut the output to %d bytes", len(got))
+	}
+	// é occupies bytes 31-32, so a head of 32 would split it.
+	head := strings.Repeat("a", 31) + "é" + strings.Repeat("b", 70)
+	if got, want := transferbench.OutputPreview(head, 64), strings.Repeat("a", 31)+"\n…\n"+strings.Repeat("b", 33); got != want {
+		t.Fatalf("head preview = %q, want %q", got, want)
+	}
+	// é occupies bytes 70-71, so a tail starting at 71 would split it.
+	tail := strings.Repeat("a", 70) + "é" + strings.Repeat("c", 31)
+	if got, want := transferbench.OutputPreview(tail, 64), strings.Repeat("a", 32)+"\n…\n"+strings.Repeat("c", 31); got != want {
+		t.Fatalf("tail preview = %q, want %q", got, want)
+	}
+}
+
+func TestCanonicalPayloadKeepsToolContentOnly(t *testing.T) {
+	detail := map[string]any{
+		"output": "x", "outputBytes": 9.0, "text": "thinking",
+		"exitCode": 0.0,
+		"files":    []any{map[string]any{"path": "a<b>&c.go", "patch": "@@ -1 +1 @@"}},
+	}
+	want := `{"exitCode":0,"files":[{"patch":"@@ -1 +1 @@","path":"a<b>&c.go"}]}`
+	if got := transferbench.CanonicalPayload(detail); got != want {
+		t.Fatalf("payload = %s, want %s", got, want)
+	}
+	if got := transferbench.CanonicalPayload(map[string]any{"output": "x", "text": "y"}); got != "" {
+		t.Fatalf("a detail with only output and text has payload %q", got)
+	}
+	if got := transferbench.CanonicalPayload(nil); got != "" {
+		t.Fatalf("a missing detail has payload %q", got)
+	}
+}

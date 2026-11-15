@@ -105,6 +105,15 @@ func TestTransferBenchmark(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// With an output path, the artifact's state digests carry every semantic
+	// difference to the comparator, so they are logged here rather than failing
+	// the test. Any other failure means the replay broke an invariant, and the
+	// run writes no artifact (see below).
+	out := os.Getenv(benchEnvOut)
+	reportState := t.Errorf
+	if out != "" {
+		reportState = t.Logf
+	}
 	scenarios := make([]transferbench.Scenario, 0, len(results))
 	for _, result := range results {
 		scenario := result.scenario
@@ -124,24 +133,26 @@ func TestTransferBenchmark(t *testing.T) {
 		}
 		clientText := result.clientText
 		if result.fixtureProblem != "" {
-			t.Errorf("%s: fixture content check failed: %s", scenario.Key(), result.fixtureProblem)
+			reportState("%s: fixture content check failed: %s", scenario.Key(), result.fixtureProblem)
 			clientText = "fixture check failed: " + result.fixtureProblem + "\n" + clientText
 		}
 		scenario.State.ExpectedDigest = transferbench.SHA256Hex(expected)
 		scenario.State.ClientDigest = transferbench.SHA256Hex([]byte(clientText))
 		scenario.State.ServerDigest = transferbench.SHA256Hex([]byte(result.serverText))
 		if string(expected) != result.serverText {
-			t.Errorf("%s: server state differs from %s:\n%s", scenario.Key(), name, firstDifference(string(expected), result.serverText))
+			reportState("%s: server state differs from %s:\n%s", scenario.Key(), name, firstDifference(string(expected), result.serverText))
 		}
 		if clientText != result.serverText {
-			t.Errorf("%s: simulated client state differs from the server:\n%s", scenario.Key(), firstDifference(result.serverText, clientText))
+			reportState("%s: simulated client state differs from the server:\n%s", scenario.Key(), firstDifference(result.serverText, clientText))
 		}
 		scenarios = append(scenarios, scenario)
 	}
 
-	out := os.Getenv(benchEnvOut)
 	if out == "" {
 		return
+	}
+	if t.Failed() {
+		t.Fatal("the replay broke an invariant; no run artifact was written")
 	}
 	fixtureFiles, err := transferbench.DirectoryDigests(repoRoot, transferbench.FixturesDir)
 	if err != nil {
@@ -193,9 +204,12 @@ func TestTransferBenchmark(t *testing.T) {
 }
 
 type benchResult struct {
-	scenario       transferbench.Scenario
-	clientText     string
-	serverText     string
+	scenario   transferbench.Scenario
+	clientText string
+	serverText string
+	// oracleText is the server state with whole outputs, which the
+	// fixture-only oracle derives without any transport's output limit.
+	oracleText     string
 	fixtureProblem string
 }
 
@@ -494,8 +508,12 @@ func (w *benchWorld) result(phase string, client *benchClient, view benchPage, m
 	if view.HasMoreBefore {
 		start = view.OldestSequence
 	}
-	clientRows, clientTurns := canonicalBenchRows(view, start)
-	serverRows, serverTurns := canonicalBenchRows(server, start)
+	// The client view is reduced exactly as received. The server read holds
+	// whole outputs, so it is reduced to the preview this transport's pages
+	// must carry; a missing, empty or wrong preview then differs.
+	clientRows, clientTurns := canonicalBenchRows(view, start, 0)
+	serverRows, serverTurns := canonicalBenchRows(server, start, w.outputLimit(client.policy))
+	oracleRows, _ := canonicalBenchRows(server, start, 0)
 	state := transferbench.State{Turns: int64(len(clientTurns))}
 	for _, row := range clientRows {
 		if row.Kind == "message" {
@@ -510,6 +528,7 @@ func (w *benchWorld) result(phase string, client *benchClient, view benchPage, m
 		},
 		clientText: transferbench.CanonicalState(clientRows, clientTurns),
 		serverText: transferbench.CanonicalState(serverRows, serverTurns),
+		oracleText: transferbench.CanonicalState(oracleRows, serverTurns),
 	}
 	if fixtureTurns != nil {
 		result.fixtureProblem = checkFixtureContent(fixtureTurns, view, client.policy, w.transport)
@@ -587,6 +606,7 @@ func (w *benchWorld) measureExpandOutput(history *benchClient) benchResult {
 		},
 		clientText: transferbench.CanonicalState(clientRows, turnStates),
 		serverText: transferbench.CanonicalState(serverRows, turnStates),
+		oracleText: transferbench.CanonicalState(serverRows, turnStates),
 	}
 	outputs := fixtureOutputs(w.fixture.HistoryTurnList())
 	for _, row := range clientRows {
@@ -1405,8 +1425,10 @@ func compareInt64(a, b int64) int {
 // canonicalBenchRows reduces a view to its rows at or after start, and the
 // states of the turns those rows belong to in first-reference order. An
 // activity's text is its summary plus any settled text in its detail; its
-// output size is outputBytes when a page cut it, else the output length.
-func canonicalBenchRows(view benchPage, start int64) ([]transferbench.CanonicalRow, []string) {
+// output size is outputBytes when a page cut it, else the output length; its
+// payload is the rest of its detail. A whole output longer than previewLimit
+// is reduced to the preview a page with that limit keeps (0 keeps it whole).
+func canonicalBenchRows(view benchPage, start, previewLimit int64) ([]transferbench.CanonicalRow, []string) {
 	turnState := map[string]string{}
 	for _, turn := range view.Turns {
 		turnState[turn.ID] = turn.State
@@ -1426,12 +1448,12 @@ func canonicalBenchRows(view benchPage, start int64) ([]transferbench.CanonicalR
 			}
 			turns = append(turns, state)
 		}
-		rows = append(rows, canonicalItem(item))
+		rows = append(rows, canonicalItem(item, previewLimit))
 	}
 	return rows, turns
 }
 
-func canonicalItem(item benchItem) transferbench.CanonicalRow {
+func canonicalItem(item benchItem, previewLimit int64) transferbench.CanonicalRow {
 	if item.Kind == "message" {
 		return transferbench.CanonicalRow{Kind: "message", Role: item.Role, Text: item.Text}
 	}
@@ -1439,9 +1461,22 @@ func canonicalItem(item benchItem) transferbench.CanonicalRow {
 	if settled, ok := item.Detail["text"].(string); ok {
 		text += "\x00" + settled
 	}
+	output, _ := item.Detail["output"].(string)
+	if _, cut := item.Detail["outputBytes"]; !cut {
+		output = transferbench.OutputPreview(output, previewLimit)
+	}
 	return transferbench.CanonicalRow{
 		Kind: "activity", ActivityKind: item.ActivityKind, Status: item.Status, Text: text, OutputBytes: outputSize(item.Detail),
+		Payload: transferbench.CanonicalPayload(item.Detail), Output: output,
 	}
+}
+
+// outputLimit is the output limit this world's transport reads pages with.
+func (w *benchWorld) outputLimit(policy transferbench.ClientPolicy) int64 {
+	if w.transport == "remote-lan" {
+		return policy.RemoteOutputLimit
+	}
+	return 0
 }
 
 func outputSize(detail map[string]any) int64 {
@@ -1455,22 +1490,27 @@ func outputSize(detail map[string]any) int64 {
 // checkFixtureContent checks a client view against the fixture itself, so a
 // wrong committed expectation cannot hide lost content: every user and
 // assistant message the turns produced appears with its exact text, every
-// activity appears with its final kind, status, summary and output size, and
-// any full output the view holds is one the fixture produced.
+// activity appears with its final kind, status, summary, output size, tool
+// payload and the output (or remote preview) a reader holds, and any full
+// output the view holds is one the fixture produced.
 func checkFixtureContent(turns []transferbench.Turn, view benchPage, policy transferbench.ClientPolicy, transport string) string {
 	start := int64(0)
 	if view.HasMoreBefore {
 		start = view.OldestSequence
 	}
 	have := map[string]int{}
-	rows, _ := canonicalBenchRows(view, start)
+	rows, _ := canonicalBenchRows(view, start, 0)
 	for _, row := range rows {
 		have[canonicalLine(row)]++
 	}
-	want := fixtureRows(turns)
+	previewLimit := int64(0)
+	if transport == "remote-lan" {
+		previewLimit = policy.RemoteOutputLimit
+	}
+	want := fixtureRows(turns, previewLimit)
 	if view.HasMoreBefore {
 		// A bounded page holds only the newest turns; require the live one.
-		want = fixtureRows(turns[len(turns)-1:])
+		want = fixtureRows(turns[len(turns)-1:], previewLimit)
 	}
 	for _, row := range want {
 		line := canonicalLine(row)
@@ -1519,8 +1559,8 @@ func checkOracle(expectedDir string, result benchResult) string {
 	}
 	oracle := string(data)
 	if scenario.Phase != "live-turn" {
-		if oracle != result.serverText {
-			return "server state differs from " + name + ": " + firstDifference(oracle, result.serverText)
+		if oracle != result.oracleText {
+			return "server state differs from " + name + ": " + firstDifference(oracle, result.oracleText)
 		}
 		return ""
 	}
@@ -1533,7 +1573,7 @@ func checkOracle(expectedDir string, result benchResult) string {
 		}
 		return lines
 	}
-	want, got := rows(oracle), rows(result.serverText)
+	want, got := rows(oracle), rows(result.oracleText)
 	if len(got) < len(want) || !slices.Equal(got[len(got)-len(want):], want) {
 		return "the live turn's rows differ from " + name
 	}
@@ -1544,8 +1584,9 @@ func canonicalLine(row transferbench.CanonicalRow) string {
 	return transferbench.CanonicalState([]transferbench.CanonicalRow{row}, nil)
 }
 
-// fixtureRows derives the rows the turns must produce, from the fixture alone.
-func fixtureRows(turns []transferbench.Turn) []transferbench.CanonicalRow {
+// fixtureRows derives the rows the turns must produce, from the fixture alone,
+// holding outputs as a page with previewLimit keeps them (0 keeps them whole).
+func fixtureRows(turns []transferbench.Turn, previewLimit int64) []transferbench.CanonicalRow {
 	var rows []transferbench.CanonicalRow
 	for _, turn := range turns {
 		rows = append(rows, transferbench.CanonicalRow{Kind: "message", Role: "user", Text: turn.User})
@@ -1601,18 +1642,28 @@ func fixtureRows(turns []transferbench.Turn) []transferbench.CanonicalRow {
 				rows = append(rows, transferbench.CanonicalRow{Kind: "message", Role: "assistant", Text: state.text})
 				continue
 			}
+			if state.streamed != "" {
+				// Documented display rule (controllers.activityDetailPayload):
+				// streamed command output wins over the provider's aggregate,
+				// and says so.
+				if state.detail == nil {
+					state.detail = map[string]any{}
+				}
+				state.detail["output"] = state.streamed
+				state.detail["outputSource"] = "stream"
+				state.detail["outputMayBePartial"] = true
+				delete(state.detail, "outputTruncated")
+			}
 			text := state.summary
 			if settled, ok := state.detail["text"].(string); ok {
 				text += "\x00" + settled
 			} else if state.settled != "" && state.kind == "reasoning" {
 				text += "\x00" + state.settled
 			}
-			output, ok := state.detail["output"].(string)
-			if !ok {
-				output = state.streamed
-			}
+			output, _ := state.detail["output"].(string)
 			rows = append(rows, transferbench.CanonicalRow{
 				Kind: "activity", ActivityKind: state.kind, Status: state.status, Text: text, OutputBytes: int64(len(output)),
+				Payload: transferbench.CanonicalPayload(state.detail), Output: transferbench.OutputPreview(output, previewLimit),
 			})
 		}
 	}
