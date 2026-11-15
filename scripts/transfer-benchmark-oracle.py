@@ -34,13 +34,47 @@ def size(text):
     return len(text.encode("utf-8"))
 
 
+def canonical_number(value):
+    """Go decodes every JSON number to a float64 and writes an integral one
+    without a fraction, so 0.0 and 0 both become 0. The two encoders agree
+    exactly only for integers within 2**53, so fixture payloads keep to those
+    and anything else is refused rather than hashed differently."""
+    if isinstance(value, float) and not value.is_integer():
+        sys.exit("fixture payload number %r is not an integer; the canonical payload encoding covers integers only" % value)
+    number = int(value)
+    if abs(number) > 2**53:
+        sys.exit("fixture payload number %d is outside +-2**53, where a float64 cannot hold it exactly" % number)
+    return number
+
+
+def canonical_value(value):
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return canonical_number(value)
+    if isinstance(value, list):
+        return [canonical_value(v) for v in value]
+    if isinstance(value, dict):
+        return {k: canonical_value(v) for k, v in value.items()}
+    sys.exit("fixture payload holds an unsupported value %r" % (value,))
+
+
 def canonical_payload(detail):
     """An activity detail without output, outputBytes and text, as compact JSON
     with sorted keys: the bytes transferbench.CanonicalPayload renders."""
-    rest = {k: v for k, v in (detail or {}).items() if k not in ("output", "outputBytes", "text")}
+    rest = {k: canonical_value(v) for k, v in (detail or {}).items() if k not in ("output", "outputBytes", "text")}
     if not rest:
         return ""
     return json.dumps(rest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def self_check():
+    """The Go side pins these bytes in TestCanonicalPayloadKeepsToolContentOnly."""
+    detail = {"output": "x", "outputBytes": 9.0, "text": "thinking", "exitCode": 0.0,
+              "files": [{"path": "a<b>&c.go", "patch": "@@ -1 +1 @@"}]}
+    want = '{"exitCode":0,"files":[{"patch":"@@ -1 +1 @@","path":"a<b>&c.go"}]}'
+    if canonical_payload(detail) != want:
+        sys.exit("canonical_payload no longer renders the bytes Go renders: " + canonical_payload(detail))
 
 
 def expand(template, number):
@@ -167,6 +201,7 @@ def oracle(provider, output_limit):
 
 
 def main():
+    self_check()
     match = re.findall(r"(?m)^const REMOTE_OUTPUT_LIMIT = ([0-9_]+);", HOOK.read_text(encoding="utf-8"))
     if len(match) != 1:
         sys.exit("REMOTE_OUTPUT_LIMIT must be declared exactly once")

@@ -216,8 +216,9 @@ func CanonicalState(rows []CanonicalRow, turnStates []string) string {
 
 // CanonicalPayload renders an activity detail without output, outputBytes and
 // text as compact JSON with sorted keys and no HTML escaping, or "" when
-// nothing else is left. scripts/transfer-benchmark-oracle.py renders the same
-// bytes from the fixtures.
+// nothing else is left. Numbers are decoded float64s, so an integral value has
+// no fraction. scripts/transfer-benchmark-oracle.py renders the same bytes from
+// the fixtures and accepts only integers within 2^53, where the two agree.
 func CanonicalPayload(detail map[string]any) string {
 	rest := make(map[string]any, len(detail))
 	for key, value := range detail {
