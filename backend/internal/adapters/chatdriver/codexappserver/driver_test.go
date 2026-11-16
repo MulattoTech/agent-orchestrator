@@ -467,7 +467,7 @@ func TestStartRejectsRelativeWorkspacePath(t *testing.T) {
 
 func TestSendTurnCarriesIdempotencyKey(t *testing.T) {
 	d, srv := newTestDriver(t)
-	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -512,7 +512,7 @@ func TestSendTurnCarriesIdempotencyKey(t *testing.T) {
 // keystroke concept in Chat mode.
 func TestSendTurnRejectsEmptyText(t *testing.T) {
 	d, _ := newTestDriver(t)
-	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
