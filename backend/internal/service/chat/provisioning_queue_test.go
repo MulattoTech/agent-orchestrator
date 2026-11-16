@@ -196,9 +196,11 @@ func TestProvisioningSendPiggybacksReportsOnlyOnRecordedTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Messages) != 1 || !strings.Contains(snapshot.Messages[0].Text, "<ao-worker-reports>") ||
-		!strings.Contains(snapshot.Messages[0].Text, "first-report") {
-		t.Fatalf("queued message missing piggyback: %+v", snapshot.Messages)
+	if len(snapshot.Messages) != 1 || snapshot.Messages[0].Text != "start" {
+		t.Fatalf("provider context leaked into authored text: %+v", snapshot.Messages)
+	}
+	if !strings.Contains(snapshot.Messages[0].DeliveryContentJSON, "first-report") {
+		t.Fatalf("queued message missing durable report context: %+v", snapshot.Messages)
 	}
 	first, found, err := st.GetReport(ctx, "first-report")
 	if err != nil || !found || first.DeliveryState != domain.ReportAcknowledged {

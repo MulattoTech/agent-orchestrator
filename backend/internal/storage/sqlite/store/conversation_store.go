@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -2909,14 +2910,14 @@ func (s *Store) CancelQueuedTurns(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.CancelQueuedConversationTurns(ctx, gen.CancelQueuedConversationTurnsParams{
-		CompletedAt:    sql.NullTime{Time: now, Valid: true},
-		ConversationID: conversationID,
-		RequestedAt:    cutoff,
-	}); err != nil {
-		return fmt.Errorf("cancel queued turns for %s: %w", conversationID, err)
-	}
-	return nil
+	return s.inTx(ctx, "cancel queued turns", func(q *gen.Queries) error {
+		if err := requeueReportsBeforeQueueCancellation(ctx, q, conversationID, cutoff, now); err != nil {
+			return err
+		}
+		return q.CancelQueuedConversationTurns(ctx, gen.CancelQueuedConversationTurnsParams{
+			CompletedAt: sql.NullTime{Time: now, Valid: true}, ConversationID: conversationID, RequestedAt: cutoff,
+		})
+	})
 }
 
 // CancelAllQueuedTurns closes the whole durable queue after an interface
@@ -2929,13 +2930,14 @@ func (s *Store) CancelAllQueuedTurns(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
-		CompletedAt:    sql.NullTime{Time: now, Valid: true},
-		ConversationID: conversationID,
-	}); err != nil {
-		return fmt.Errorf("cancel all queued turns for %s: %w", conversationID, err)
-	}
-	return nil
+	return s.inTx(ctx, "cancel all queued turns", func(q *gen.Queries) error {
+		if err := requeueReportsBeforeQueueCancellation(ctx, q, conversationID, time.Time{}, now); err != nil {
+			return err
+		}
+		return q.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
+			CompletedAt: sql.NullTime{Time: now, Valid: true}, ConversationID: conversationID,
+		})
+	})
 }
 
 // CancelQueuedTurnByID removes one undispatched queue item without disturbing
@@ -2947,17 +2949,67 @@ func (s *Store) CancelQueuedTurnByID(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.CancelQueuedConversationTurnByID(ctx,
-		gen.CancelQueuedConversationTurnByIDParams{
-			CompletedAt:    sql.NullTime{Time: now, Valid: true},
-			ID:             turnID,
-			ConversationID: conversationID,
-		})
+	return s.inTx(ctx, "cancel queued turn", func(q *gen.Queries) error {
+		if err := requeueUndispatchedReports(ctx, q, conversationID, turnID, now); err != nil {
+			return err
+		}
+		rows, err := q.CancelQueuedConversationTurnByID(ctx,
+			gen.CancelQueuedConversationTurnByIDParams{
+				CompletedAt: sql.NullTime{Time: now, Valid: true}, ID: turnID, ConversationID: conversationID,
+			})
+		if err != nil {
+			return fmt.Errorf("cancel queued turn %s: %w", turnID, err)
+		}
+		if rows == 0 {
+			return fmt.Errorf("%w: %s", ErrQueuedTurnNotAvailable, turnID)
+		}
+		return nil
+	})
+}
+
+func requeueReportsBeforeQueueCancellation(ctx context.Context, q *gen.Queries, conversationID string, cutoff, now time.Time) error {
+	queue, err := q.SelectQueuedConversationTurnOrder(ctx, conversationID)
 	if err != nil {
-		return fmt.Errorf("cancel queued turn %s: %w", turnID, err)
+		return err
 	}
-	if rows == 0 {
-		return fmt.Errorf("%w: %s", ErrQueuedTurnNotAvailable, turnID)
+	for _, turn := range queue {
+		if !cutoff.IsZero() && turn.RequestedAt.After(cutoff) {
+			continue
+		}
+		if err := requeueUndispatchedReports(ctx, q, conversationID, turn.ID, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// requeueUndispatchedReports runs in the same transaction as cancellation.
+// Nothing has reached the provider: the editable-queue query excludes promoted
+// turns. Reports remain immutable records; only their acceptance is withdrawn.
+func requeueUndispatchedReports(ctx context.Context, q *gen.Queries, conversationID, turnID string, now time.Time) error {
+	message, err := q.SelectQueuedConversationMessage(ctx, gen.SelectQueuedConversationMessageParams{
+		ConversationID: conversationID, TurnID: nullableString(turnID),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // Automation turns have no user-owned piggyback context.
+	}
+	if err != nil || message.DeliveryContentJson == "" {
+		return err
+	}
+	var content []ports.ChatContent
+	if err := json.Unmarshal([]byte(message.DeliveryContentJson), &content); err != nil {
+		return fmt.Errorf("decode report context before cancellation: %w", err)
+	}
+	for _, block := range content {
+		batchID, found := strings.CutPrefix(block.URI, ports.ChatWorkerReportURIPrefix)
+		if !found || !block.Internal || block.Type != "text" || batchID == "" {
+			continue
+		}
+		if err := q.RequeueUndispatchedReportBatch(ctx, gen.RequeueUndispatchedReportBatchParams{
+			ConversationID: conversationID, DeliveryBatchID: batchID, AvailableAt: now,
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
