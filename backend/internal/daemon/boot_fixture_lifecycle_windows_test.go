@@ -560,6 +560,39 @@ func (c *daemonFixtureProcess) waitReady(t *testing.T) {
 		t.Fatal("fixture runfile/listener ownership mismatch")
 	}
 }
+func (c *daemonFixtureProcess) waitConversationReady(t *testing.T, sessionID string) {
+	t.Helper()
+	deadline := time.Now().Add(45 * time.Second)
+	lastState := ""
+	for time.Now().Before(deadline) {
+		if c.exited.Load() {
+			t.Fatalf("owned child exited before %s controller became ready", sessionID)
+		}
+		entries, err := readFixtureEffects(filepath.Join(c.root, c.phase+"-effects.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.Kind == "forbidden" {
+				t.Fatalf("forbidden effect before controller admission: %s", entry.Name)
+			}
+		}
+		// Only a GET is polled. A missing controller never causes a send, wake or
+		// retry; the two fixed POSTs below are each attempted exactly once.
+		body := c.request(t, http.MethodGet, "/api/v1/sessions/"+sessionID+"/conversation", nil, http.StatusOK)
+		ready, state, err := fixtureConversationReady(body, sessionID)
+		if err != nil {
+			t.Fatalf("read-only controller readiness for %s: %v", sessionID, err)
+		}
+		lastState = state
+		if ready {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("controller %s was never admitted; final read-only state=%q", sessionID, lastState)
+}
+
 func (c *daemonFixtureProcess) request(t *testing.T, method, path string, body any, want int) []byte {
 	t.Helper()
 	allowed := map[string]bool{"GET /healthz": true, "GET /api/v1/sessions": true, "GET /internal/reliability": true, "PUT /internal/reliability/inference": true, "POST /shutdown": true}
@@ -716,6 +749,8 @@ func TestOfflineDaemonLifecycleRecovery(t *testing.T) {
 	first.request(t, "GET", "/healthz", nil, http.StatusOK)
 	first.request(t, "GET", "/api/v1/sessions", nil, http.StatusOK)
 	first.request(t, "GET", "/internal/reliability", nil, http.StatusOK)
+	first.waitConversationReady(t, "fixture-project-2")
+	first.waitConversationReady(t, "fixture-project-3")
 	first.request(t, "PUT", "/internal/reliability/inference", map[string]any{"emergency_stop": false, "pause": false}, http.StatusNoContent)
 	first.request(t, "POST", "/api/v1/sessions/fixture-project-2/conversation/messages", map[string]string{"text": "Complete one synthetic turn", "clientMessageId": "fixture-complete"}, http.StatusAccepted)
 	fixtureWait(t, "completed synthetic HTTP turn", func() bool {

@@ -29,7 +29,12 @@ func (d *fixtureChatDriver) Probe(context.Context) (ports.ChatCapabilities, erro
 	return fixtureChatCapabilities(), nil
 }
 func fixtureChatCapabilities() ports.ChatCapabilities {
-	return ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true, ports.ChatCapabilityInterrupt: true}
+	return ports.ChatCapabilities{
+		ports.ChatCapabilityStreaming: true,
+		ports.ChatCapabilityApprovals: true,
+		ports.ChatCapabilityResume:    true,
+		ports.ChatCapabilityInterrupt: true,
+	}
 }
 func (d *fixtureChatDriver) Start(context.Context, ports.ChatStartConfig) (ports.ChatConversation, error) {
 	return nil, d.effects.Deny("chat.unconfigured-new-conversation")
@@ -78,11 +83,14 @@ func (d *fixtureChatDriver) open(ctx context.Context, cfg ports.ChatResumeConfig
 }
 
 type fixtureChatConversation struct {
-	driver *fixtureChatDriver
-	cfg    ports.ChatResumeConfig
-	gate   *inferenceguard.Gate
-	events chan ports.ChatEvent
-	once   sync.Once
+	driver           *fixtureChatDriver
+	cfg              ports.ChatResumeConfig
+	gate             *inferenceguard.Gate
+	events           chan ports.ChatEvent
+	once             sync.Once
+	mu               sync.Mutex
+	closed           bool
+	pendingApprovals map[string]string
 }
 
 func (c *fixtureChatConversation) ProviderConversationID() string {
@@ -95,16 +103,106 @@ func (c *fixtureChatConversation) ReconnectedLive() bool          { return true 
 func (c *fixtureChatConversation) PreservesProviderOnClose() bool { return true }
 func (c *fixtureChatConversation) Events() <-chan ports.ChatEvent { return c.events }
 func (c *fixtureChatConversation) Close() error {
-	c.once.Do(func() { close(c.events); c.driver.effects.Allow("chat.controller-detach") })
+	c.once.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		clear(c.pendingApprovals)
+		close(c.events)
+		c.mu.Unlock()
+		c.driver.effects.Allow("chat.controller-detach")
+	})
 	return nil
+}
+func (c *fixtureChatConversation) emit(ctx context.Context, event ports.ChatEvent) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.emitLocked(ctx, event)
+}
+func (c *fixtureChatConversation) emitLocked(ctx context.Context, event ports.ChatEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.closed {
+		return errors.New("synthetic conversation is closed")
+	}
+	select {
+	case c.events <- event:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		// A fixed bounded fake must fail rather than block Close indefinitely.
+		return c.driver.effects.Deny("chat.synthetic-stream-backpressure")
+	}
 }
 func (c *fixtureChatConversation) Interrupt(context.Context, string) error {
 	return c.driver.effects.Deny("chat.unconfigured-interrupt")
 }
-func (c *fixtureChatConversation) ResolveRequest(context.Context, string, ports.ChatDecision) error {
-	return c.driver.effects.Deny("chat.unconfigured-approval")
+
+// requestApproval represents a synthetic pending decision only. It never starts
+// a command or changes a provider turn. The fixed lifecycle workload does not
+// request approvals; contract tests explicitly exercise the supported channel.
+func (c *fixtureChatConversation) requestApproval(ctx context.Context, requestID, turnID string) error {
+	if !strings.HasPrefix(requestID, "synthetic-approval-") || !strings.HasPrefix(turnID, "synthetic-turn-") {
+		return c.driver.effects.Deny("chat.unqualified-approval")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pendingApprovals == nil {
+		c.pendingApprovals = map[string]string{}
+	}
+	if _, exists := c.pendingApprovals[requestID]; exists {
+		return c.driver.effects.Deny("chat.duplicate-approval")
+	}
+	if err := c.emitLocked(ctx, ports.ChatEvent{
+		Kind: ports.ChatEventApprovalRequested, ProviderConversationID: c.cfg.ProviderConversationID,
+		ProviderTurnID: turnID, RequestID: requestID,
+		Summary: "Synthetic decision; no command or model will execute.",
+		Decisions: []ports.ChatDecisionOption{
+			{ID: "fixture-allow-once", Kind: ports.ChatDecisionAllowOnce},
+			{ID: "fixture-reject-once", Kind: ports.ChatDecisionRejectOnce},
+		},
+	}); err != nil {
+		return err
+	}
+	c.pendingApprovals[requestID] = turnID
+	c.driver.effects.Allow("chat.synthetic-approval-requested")
+	return nil
+}
+
+func (c *fixtureChatConversation) ResolveRequest(ctx context.Context, requestID string, decision ports.ChatDecision) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	turnID, pending := c.pendingApprovals[requestID]
+	if c.closed || !pending {
+		return errors.Join(ports.ErrChatRequestNotPending, c.driver.effects.Deny("chat.unconfigured-approval"))
+	}
+	if (decision.ID != "fixture-allow-once" && decision.ID != "fixture-reject-once") || len(decision.Raw) != 0 {
+		return errors.Join(ports.ErrChatDecisionNotOffered, c.driver.effects.Deny("chat.unoffered-approval-decision"))
+	}
+	if err := c.emitLocked(ctx, ports.ChatEvent{
+		Kind: ports.ChatEventApprovalResolved, ProviderConversationID: c.cfg.ProviderConversationID,
+		ProviderTurnID: turnID, RequestID: requestID,
+	}); err != nil {
+		return err
+	}
+	delete(c.pendingApprovals, requestID)
+	c.driver.effects.Allow("chat.synthetic-approval-resolved")
+	return nil
 }
 func (c *fixtureChatConversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.ChatTurnRef{}, err
+	}
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return ports.ChatTurnRef{}, c.driver.effects.Deny("chat.detached-provider-write")
+	}
 	p, err := inferenceguard.ReadPolicy()
 	if err != nil {
 		return ports.ChatTurnRef{}, err
@@ -124,6 +222,13 @@ func (c *fixtureChatConversation) SendTurn(ctx context.Context, msg ports.ChatUs
 	requestID := "synthetic-" + hex.EncodeToString(key[:])
 	nativeTurn := "synthetic-turn-" + msg.ClientMessageID
 	err = c.gate.Dispatch(ctx, inferenceguard.Request{ID: requestID, Session: string(c.cfg.SessionID), Project: string(c.cfg.ProjectID), NativeThreadID: c.cfg.ProviderConversationID, Operation: "turn/start", Selection: selected}, func() error {
+		// Close and the synthetic write have one ownership fence. A shutdown
+		// racing admission may not write through a detached controller.
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.closed {
+			return c.driver.effects.Deny("chat.detached-provider-write")
+		}
 		if (msg.ClientMessageID != "fixture-complete" || c.cfg.SessionID != "fixture-project-2") && (msg.ClientMessageID != "fixture-uncertain" || c.cfg.SessionID != "fixture-project-3") {
 			return c.driver.effects.Deny("chat.unconfigured-provider-write")
 		}
@@ -150,13 +255,19 @@ func (c *fixtureChatConversation) SendTurn(ctx context.Context, msg ports.ChatUs
 	if err = c.gate.Bind(ctx, requestID, nativeTurn); err != nil {
 		return ports.ChatTurnRef{}, err
 	}
-	c.events <- ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: nativeTurn, ProviderConversationID: c.cfg.ProviderConversationID}
+	if err = c.emit(ctx, ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: nativeTurn, ProviderConversationID: c.cfg.ProviderConversationID}); err != nil {
+		return ports.ChatTurnRef{}, err
+	}
 	if msg.ClientMessageID == "fixture-complete" {
 		if err = c.gate.SettleRequest(ctx, requestID, ""); err != nil {
 			return ports.ChatTurnRef{}, err
 		}
-		c.events <- ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: nativeTurn, ProviderConversationID: c.cfg.ProviderConversationID, ProviderItemID: "synthetic-answer", Text: "Synthetic completion; no model executed."}
-		c.events <- ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: nativeTurn, ProviderConversationID: c.cfg.ProviderConversationID, TurnState: domain.TurnStateCompleted}
+		if err = c.emit(ctx, ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: nativeTurn, ProviderConversationID: c.cfg.ProviderConversationID, ProviderItemID: "synthetic-answer", Text: "Synthetic completion; no model executed."}); err != nil {
+			return ports.ChatTurnRef{}, err
+		}
+		if err = c.emit(ctx, ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: nativeTurn, ProviderConversationID: c.cfg.ProviderConversationID, TurnState: domain.TurnStateCompleted}); err != nil {
+			return ports.ChatTurnRef{}, err
+		}
 	}
 	return ports.ChatTurnRef{ProviderTurnID: nativeTurn}, nil
 }
