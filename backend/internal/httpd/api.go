@@ -27,6 +27,7 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	Reliability *ReliabilityDeps
 	// SessionForks serves the experimental fork routes. Nil refuses them.
 	SessionForks       controllers.SessionForkService
 	UsageFlush         func(context.Context)

@@ -1244,7 +1244,12 @@ func Run(buildVersion string) (retErr error) {
 	// Terminal hooks pass the hook process gate: a Claude process other than
 	// the session's own must not replace its activity or transcript.
 	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
+	reliability, reliabilityErr := startReliability(ctx, cfg, store, sessMgr, agentDeps.CodexAccounts, codexHome, log)
+	if reliabilityErr != nil {
+		return fmt.Errorf("initialize reliability authority: %w", reliabilityErr)
+	}
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+		Reliability:        reliability,
 		SessionForks:       sessionForkSvc,
 		Awake:              awakeSvc,
 		Projects:           projectSvc,

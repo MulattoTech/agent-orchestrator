@@ -4284,6 +4284,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/reviews/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish or verify a saved review without model inference */
+        post: operations["publishSavedReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/reviews/rerequest": {
         parameters: {
             query?: never;
@@ -6378,6 +6395,10 @@ export interface components {
             /** @description The tab's label. */
             title: string;
         };
+        ControllersPublishReviewInput: {
+            /** @description Saved complete review run to publish or verify. */
+            runId: string;
+        };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
             hostKey: string;
@@ -7035,6 +7056,11 @@ export interface components {
             deliveredWithTurnId: string;
             steerActivityId?: string;
             turnId: string;
+        };
+        DomainPRCompletionDependency: {
+            headSha: string;
+            prUrl: string;
+            sessionId: string;
         };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
@@ -8032,6 +8058,13 @@ export interface components {
             state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
         };
+        ReviewPublicationResult: {
+            providerReviewUrl: string;
+            /** @enum {string} */
+            providerState: "COMMENTED" | "APPROVED" | "CHANGES_REQUESTED";
+            reused: boolean;
+            review: components["schemas"]["ReviewRun"];
+        };
         ReviewRun: {
             autoInjectReview: boolean;
             batchId: string;
@@ -8915,6 +8948,7 @@ export interface components {
         };
         SpawnSessionRequest: {
             accountId?: string;
+            admissionDependencies?: string[];
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             async?: boolean;
@@ -8934,6 +8968,7 @@ export interface components {
             mode?: "chat" | "tui";
             model?: string;
             parentSessionId?: string;
+            prCompletionDependencies?: components["schemas"]["DomainPRCompletionDependency"][];
             projectId?: string;
             prompt?: string;
             /** @enum {string} */
@@ -25616,6 +25651,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    publishSavedReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersPublishReviewInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPublicationResult"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

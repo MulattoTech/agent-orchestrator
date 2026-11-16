@@ -84,6 +84,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountControl(r, control)
 	mountTelemetry(r, cfg, deps.Telemetry)
 	mountUsageFlush(r, deps.UsageFlush)
+	mountReliability(r, deps.Reliability)
 	mountTelemetryIdentity(r, deps.TelemetryIdentity)
 	mountMobile(r, deps.Mobile)
 	mountBrowserLive(r, deps.BrowserLive)
