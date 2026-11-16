@@ -31,6 +31,7 @@
 <script>
 let last,editing=false;
 const by=id=>document.getElementById(id), known=v=>v===null||v===undefined?'Unknown':typeof v==='number'?v.toLocaleString():String(v);
+const receiptValue=(count,value)=>Number.isInteger(count)&&count>0?value:null;
 function cell(row,v){const td=document.createElement('td');td.textContent=known(v);row.append(td)}
 async function api(path,method,body){const r=await fetch('/internal/reliability'+path,{method,headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});if(!r.ok)throw Error(await r.text());return r.status===204?null:await r.json()}
 function render(d){
@@ -45,9 +46,9 @@ function render(d){
  if(!editing){by('slots').value=l.registeredSlots||40;by('workers').value=l.maxActiveWorkers||4;by('projectWorkers').value=l.defaultProjectWorkers||4;by('queueEnabled').checked=!!l.queueEnabled;by('inference').value=q.inference_cap||1;by('projectInference').value=q.project_cap||1;by('reviewers').value=q.reviewer_cap||1}
  by('verifyAllowance').disabled=!d.allowanceCheckEnabled;by('quota').textContent='Provider quota: '+known(q.quota)+'. Reset hint: '+(q.reset_at||'Unknown')+'; source: '+(q.reset_source||'Unknown')+'. Local turn budget remaining: '+known(q.conservative_turns_remaining)+'; reserved turns: '+known(q.reserve_turns)+'. A clock reaching the hint never clears quota.';
  by('models').replaceChildren();
- for(const m of q.models||[]){const tr=document.createElement('tr');for(const v of [m.model+' / '+m.effort,m.turns,m.failed,m.receipts,m.input_tokens-m.cached_input_tokens,m.cached_input_tokens,m.output_tokens,m.reasoning_output_tokens])cell(tr,v);by('models').append(tr)}
+ for(const m of q.models||[]){const tr=document.createElement('tr');for(const v of [m.model+' / '+m.effort,m.turns,m.failed,m.receipts,receiptValue(m.receipts,m.input_tokens-m.cached_input_tokens),receiptValue(m.receipts,m.cached_input_tokens),receiptValue(m.receipts,m.output_tokens),receiptValue(m.receipts,m.reasoning_output_tokens)])cell(tr,v);by('models').append(tr)}
  by('sessionUsage').replaceChildren();
- for(const m of d.sessionUsage||[]){const tr=document.createElement('tr');for(const v of [m.session_id+' / '+(m.project_id||'Unknown'),m.model+' / '+m.effort,m.dispatched_turns+' / '+m.failed_turns+' / '+m.uncertain_turns,m.response_receipts,m.input_tokens+' / '+m.cached_input_tokens+' / '+m.output_tokens])cell(tr,v);by('sessionUsage').append(tr)}
+ for(const m of d.sessionUsage||[]){const tr=document.createElement('tr');for(const v of [m.session_id+' / '+(m.project_id||'Unknown'),m.model+' / '+m.effort,m.dispatched_turns+' / '+m.failed_turns+' / '+m.uncertain_turns,m.response_receipts,known(receiptValue(m.response_receipts,m.input_tokens))+' / '+known(receiptValue(m.response_receipts,m.cached_input_tokens))+' / '+known(receiptValue(m.response_receipts,m.output_tokens))])cell(tr,v);by('sessionUsage').append(tr)}
  by('outcomes').textContent='Merged tracked PRs: '+known(d.mergedPRs)+'. Accepted requirements: '+known(d.acceptedRequirements)+'. Idle inference waste: '+known(d.idleWaste)+'. Retry attribution: '+known(d.retryAttribution);
  by('details').textContent=JSON.stringify({pressure:d.pressure,receipts:d.receipts,provenance:d.dispatches,health:d.controllerHealth,workspaceScripts:d.workspaceScripts,sessionOutcomes:d.sessionOutcomes,sessionOutcomesAvailable:d.sessionOutcomesAvailable,errors:d.errors},null,2);
  by('queue').replaceChildren();

@@ -71,3 +71,20 @@ test('native model labels are plain text and policy alarms outrank quota status'
  assert.equal(d.querySelector('#status').textContent,'Policy violation');
  assert.match(d.querySelector('#models').textContent,/800/);
 });
+
+test('missing receipts render unknown usage while measured zero remains zero',async t=>{
+ const data=fixture();
+ const missing={model:'sol',effort:'medium',turns:1,failed:0,receipts:0,input_tokens:0,cached_input_tokens:0,output_tokens:0,reasoning_output_tokens:0};
+ data.inference.models=[missing,{...missing,model:'astra',receipts:1}];
+ data.sessionUsage=[{session_id:'s',project_id:'p',model:'sol',effort:'medium',dispatched_turns:1,failed_turns:0,uncertain_turns:1,response_receipts:0,input_tokens:0,cached_input_tokens:0,output_tokens:0},
+ {...{session_id:'s2',project_id:'p',model:'astra',effort:'medium',dispatched_turns:1,failed_turns:0,uncertain_turns:0,response_receipts:1,input_tokens:0,cached_input_tokens:0,output_tokens:0}}];
+ const {document:d}=await mount(t,data);
+ const modelRows=[...d.querySelectorAll('#models tr')];
+ assert.equal(modelRows[0].children[4].textContent,'Unknown');
+ assert.equal(modelRows[0].children[6].textContent,'Unknown');
+ assert.equal(modelRows[1].children[4].textContent,'0');
+ assert.equal(modelRows[1].children[6].textContent,'0');
+ const sessions=[...d.querySelectorAll('#sessionUsage tr')];
+ assert.equal(sessions[0].children[4].textContent,'Unknown / Unknown / Unknown');
+ assert.equal(sessions[1].children[4].textContent,'0 / 0 / 0');
+});
