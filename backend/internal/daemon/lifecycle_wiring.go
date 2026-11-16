@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,10 +16,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/container/dockerreap"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
+	scmmulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/multi"
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
-	workspacerouter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/router"
-	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
@@ -75,13 +73,17 @@ type lifecycleStack struct {
 // The messenger is the per-daemon agent messenger the LCM uses to nudge agents
 // in response to SCM observations (CI failure, review feedback, merge conflict).
 func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger) *lifecycleStack {
+	return startLifecycleWithReaper(ctx, dataDir, store, runtime, messenger, notifier, telemetry, agents, logger, dockerreap.New())
+}
+
+func startLifecycleWithReaper(ctx context.Context, dataDir string, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger, containerReaper ports.ContainerReaper) *lifecycleStack {
 	lcm := lifecycle.New(store, messenger,
 		lifecycle.WithNotificationSink(notifier),
 		lifecycle.WithTelemetry(telemetry),
 		// One delivery recorder for every owner of a session end; services
 		// reach it through lcm.DeliveryTelemetry().
 		lifecycle.WithDeliveryTelemetry(deliverytelemetry.New(telemetry, store)),
-		lifecycle.WithContainerReaper(dockerreap.New(), store),
+		lifecycle.WithContainerReaper(containerReaper, store),
 		lifecycle.WithActiveSteering(activeTurnSteering(agents)),
 		lifecycle.WithStartupSignalGate(startupSignalGatesInput(agents)),
 		lifecycle.WithUrgentNudgeGate(urgentNudgeWaitingInputSafe(agents)),
@@ -312,30 +314,32 @@ func telemetryEmitsSpawned(cfg config.Config) bool {
 // It also returns the manager so the caller can wire Reconcile into the boot
 // sequence.
 func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, artifactVersions *artifactversions.Capturer, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, reviewerRecoveryDone <-chan struct{}, defaults sessionmanager.SessionModeDefaults, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, reviewers *reviewer.Resolver, reviewRefresher reviewsvc.ThreadRefresher, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
-	gitWS, err := gitworktree.New(gitworktree.Options{
-		// Per-session worktrees live under the data dir, so a single AO_DATA_DIR
-		// override moves all durable per-user state together.
-		ManagedRoot: filepath.Join(cfg.DataDir, "worktrees"),
-		// Resolve each project's source repo from the projects table, so a
-		// session spawned for a registered project materialises its worktree off
-		// that repo. Unregistered projects fail loudly.
-		RepoResolver: projectRepoResolver{store: store},
-		Logger:       log,
-	})
+	workspace, err := productionWorkspace(cfg, store, log)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("session workspace: %w", err)
+		return nil, nil, nil, err
 	}
-	scratchWS, err := scratchworkspace.New(scratchworkspace.Options{
-		ManagedRoot: filepath.Join(cfg.DataDir, "worktrees"),
-	})
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("scratch session workspace: %w", err)
+	var resolver bootReviewerResolver = reviewers
+	if reviewers == nil {
+		resolver, err = reviewer.NewResolver()
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("reviewer resolver: %w", err)
+		}
 	}
-	ws := workspacerouter.New(workspacerouter.Deps{
-		Git:      gitWS,
-		Scratch:  scratchWS,
-		Projects: store,
-	})
+	return startSessionWithDependencies(ctx, cfg, runtime, store, lcm, artifactVersions, messenger, telemetry, notifications, agents, agentReadiness, previewLifecycle, browserLifecycle, browserCapabilities, chat, reviewerRecoveryDone, defaults, tracker, codexOperationGate, sessionBootDependencies{Workspace: workspace, SCM: newMultiSCMProvider(cfg.GitLab, log), Reviewers: resolver, BranchStateGit: productionBranchStateGit()}, reviewRefresher, log)
+}
+
+type sessionBootDependencies struct {
+	Workspace      ports.Workspace
+	BranchStateGit sessionsvc.BranchStateGit
+	SCM            *scmmulti.Provider
+	Reviewers      bootReviewerResolver
+}
+
+func startSessionWithDependencies(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, artifactVersions *artifactversions.Capturer, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, reviewerRecoveryDone <-chan struct{}, defaults sessionmanager.SessionModeDefaults, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, wiring sessionBootDependencies, reviewRefresher reviewsvc.ThreadRefresher, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
+	if bootValueMissing(wiring.Workspace) || bootValueMissing(wiring.Reviewers) || bootValueMissing(wiring.BranchStateGit) {
+		return nil, nil, nil, errors.New("session boot requires explicit workspace, reviewer and branch-state dependencies")
+	}
+	ws, scmProvider, reviewers := wiring.Workspace, wiring.SCM, wiring.Reviewers
 	mgr := sessionmanager.New(sessionmanager.Deps{
 		SessionAdmission:    cfg.SessionAdmission,
 		Runtime:             runtime,
@@ -360,7 +364,6 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	})
 	mgr.SetAgentReadiness(agentReadiness)
 	mgr.StartAdmissionDispatcher(ctx)
-	scmProvider := newMultiSCMProvider(cfg.GitLab, log)
 	// Attach the operator's GitHub login to product telemetry only when its carrier
 	// event can actually be sent, and guard the typed nil from newMultiSCMProvider
 	// so the interface stays nil (degrading to anonymous) rather than wrapping a
@@ -374,6 +377,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Store:             store,
 		PRClaimer:         store,
 		SCM:               scmProvider,
+		BranchStateGit:    wiring.BranchStateGit,
 		DataDir:           cfg.DataDir,
 		Tracker:           tracker,
 		Telemetry:         telemetry,
@@ -400,11 +404,6 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	// from the reviewer registry (distinct from the worker agent set). The
 	// reviewer posts its review to the PR itself, so the service needs no SCM
 	// writer.
-	if reviewers == nil {
-		if reviewers, err = reviewer.NewResolver(); err != nil {
-			return nil, nil, nil, fmt.Errorf("reviewer resolver: %w", err)
-		}
-	}
 	reviewerChat, _ := chat.(reviewcore.ReviewerChatController)
 	reviewEngine := reviewcore.New(reviewcore.Deps{
 		// The manager's installer gate is bound after the installer is built.

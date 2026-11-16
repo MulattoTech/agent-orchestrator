@@ -101,7 +101,7 @@ func startReliabilityWithObservations(ctx context.Context, cfg config.Config, st
 	if o.autoscale {
 		admission.SetWorkerResourceCeiling(0)
 	}
-	go func() {
+	started := startDaemonWorker(ctx, func() {
 		defer o.receipts.Close()
 		o.observe(ctx)
 		ticker := time.NewTicker(30 * time.Second)
@@ -114,7 +114,10 @@ func startReliabilityWithObservations(ctx context.Context, cfg config.Config, st
 				o.observe(ctx)
 			}
 		}
-	}()
+	})
+	if !started {
+		o.receipts.Close()
+	}
 	log.Info("local reliability observer enabled", "autoscale", o.autoscale, "inference", "none")
 	return &httpd.ReliabilityDeps{Snapshot: o.snapshot, VerifyAllowance: func(ctx context.Context) error { return verifyPostRefreshAllowance(ctx, gate, accounts, accountHome) }, UpdateWorkers: admission.UpdateAdmissionLimits,
 		UpdateInference: func(ctx context.Context, c inferenceguard.Controls) error {

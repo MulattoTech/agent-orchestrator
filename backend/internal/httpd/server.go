@@ -48,6 +48,15 @@ type Server struct {
 // ("daemon listening") and written to running.json, both of which the supervisor
 // reads, so the fallback propagates to the renderer with no UI changes.
 func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager, deps APIDeps) (*Server, error) {
+	return NewWithDepsAndMiddleware(cfg, log, termMgr, deps, func(handler http.Handler) http.Handler { return handler })
+}
+
+// NewWithDepsAndMiddleware uses the same server/router lifecycle with an
+// explicit pre-serving handler boundary. A missing wrapper fails before bind.
+func NewWithDepsAndMiddleware(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager, deps APIDeps, middleware func(http.Handler) http.Handler) (*Server, error) {
+	if middleware == nil {
+		return nil, errors.New("HTTP handler middleware is required")
+	}
 	log = loggerOrDefault(log)
 	ln, err := net.Listen("tcp", cfg.Addr())
 	if err != nil {
@@ -80,6 +89,11 @@ func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager,
 		// ReadHeaderTimeout guards against slow-loris even on loopback;
 		// per-request body/handler timeouts are applied per-surface.
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+	srv.http.Handler = middleware(srv.http.Handler)
+	if srv.http.Handler == nil {
+		srv.Close()
+		return nil, errors.New("HTTP handler middleware returned nil")
 	}
 	return srv, nil
 }

@@ -94,15 +94,16 @@ type parsed struct {
 
 // Service owns the current opaque handles. Re-reading selected sources prevents stale preview writes.
 type Service struct {
-	store        Store
-	supportsChat func(domain.AgentHarness) bool
-	roots        map[domain.AgentHarness]string
-	home         string
-	excluded     []string
-	mu           sync.Mutex
-	selections   map[string]selection
-	cache        map[string]parsed
-	now          func() time.Time
+	store         Store
+	supportsChat  func(domain.AgentHarness) bool
+	roots         map[domain.AgentHarness]string
+	explicitRoots bool
+	home          string
+	excluded      []string
+	mu            sync.Mutex
+	selections    map[string]selection
+	cache         map[string]parsed
+	now           func() time.Time
 }
 
 // New uses the same provider homes as ordinary native AO launches. AO's own
@@ -521,6 +522,9 @@ func (f sourceFiles) cacheKey() string {
 func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.explicitRoots && len(s.roots) == 0 {
+		return Preview{Candidates: []Candidate{}}, nil
+	}
 	dests, err := s.destinations(ctx)
 	if err != nil {
 		return Preview{}, err
@@ -556,7 +560,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	projects := s.registeredDiscoveryRoots(dests)
 	for harness, importer := range harnessImporters {
 		configured, ok := s.roots[harness]
-		if !ok && importer.discoverRegistered == nil {
+		if !ok && (s.explicitRoots || importer.discoverRegistered == nil) {
 			continue
 		}
 		files, err := discoverFor(ctx, harness, canonical(configured), projects)
@@ -579,6 +583,10 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		group, groupCtx := errgroup.WithContext(ctx)
 		group.SetLimit(max(1, runtime.GOMAXPROCS(0)/2))
 		for i, file := range files {
+			if err := s.checkExplicitSource(harness, file.root, file.paths...); err != nil {
+				results[i] = parsed{err: err}
+				continue
+			}
 			if !file.modTime.IsZero() && file.modTime.Before(recent) {
 				results[i] = parsed{err: errInactive}
 				continue
@@ -679,6 +687,9 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	if source == nil || source.Adopted || source.ResumeNativeID != "" || source.ResumeCwd != "" {
 		return nil
 	}
+	if err := s.checkExplicitSource(rec.Harness, source.ConfigDir, rec.Metadata.NativeTranscriptPath); err != nil {
+		return err
+	}
 	dests, err := s.destinations(ctx)
 	if err != nil {
 		return err
@@ -694,6 +705,9 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 		if len(segments) > 0 {
 			paths = segments
 		}
+	}
+	if err := s.checkExplicitSource(rec.Harness, source.ConfigDir, paths...); err != nil {
+		return err
 	}
 	fresh, err := readTranscriptForProjects(ctx, rec.Harness, source.ConfigDir, projects, paths...)
 	if err != nil {

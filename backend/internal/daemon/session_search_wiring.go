@@ -71,7 +71,7 @@ func startSessionSearchResolved(ctx context.Context, store *sqlite.Store, roots 
 		PRs:    store,
 		Logger: logger,
 	})
-	go runSessionSearch(ctx, service, logger)
+	startDaemonWorker(ctx, func() { runSessionSearch(ctx, service, logger) })
 	return service
 }
 
