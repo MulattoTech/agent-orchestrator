@@ -12,6 +12,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
@@ -87,8 +88,8 @@ type Manager struct {
 	lastInputAt  map[string]time.Time
 
 	// fences holds one write fence per terminal id. Every pane write for that
-	// terminal holds it — a keystroke, and input buffered during attach as it is
-	// replayed — and so do BeginInputDrain and HoldInput, so they order against
+	// terminal holds it â€” a keystroke, and input buffered during attach as it is
+	// replayed â€” and so do BeginInputDrain and HoldInput, so they order against
 	// those writes without stalling any other terminal's input. Lock order: a
 	// fence, then inputMu.
 	fencesMu sync.Mutex
@@ -106,7 +107,7 @@ type inputFence struct {
 // sharedTerm tracks every client currently viewing one terminal id (one PTY) so
 // the daemon can pick a single authoritative grid for it. A PTY has exactly one
 // size; when several clients view it at once the largest eligible client wins and
-// the rest render that grid scaled — this is what keeps a small phone from
+// the rest render that grid scaled â€” this is what keeps a small phone from
 // stripping down the desktop, and keeps every client's grid matched to the PTY so
 // full-screen TUIs don't mis-render.
 type sharedTerm struct {
@@ -174,6 +175,12 @@ func (m *Manager) SetSessionInputLease(lease sessionguard.InputLease) {
 }
 
 func (m *Manager) acquireSessionInput(id string) (func(), bool) {
+	// Raw bytes cannot carry model, effort or quota admission metadata. Even
+	// a Chat-labelled stale handle or an unbound session lease must not turn
+	// this terminal stream into a bypass of the governed Chat boundary.
+	if inferenceguard.Enabled() {
+		return nil, false
+	}
 	m.inputLeaseMu.RLock()
 	lease := m.inputLease
 	m.inputLeaseMu.RUnlock()
@@ -393,7 +400,7 @@ func (m *Manager) recordInputAt(terminalID string, raw []byte) {
 
 // terminalReports matches bytes the terminal view sends on its own, not typed by
 // anyone: focus in and out, and replies to the agent's queries about the
-// device and cursor, colours, modes ($y), keyboard flags (?…u), window size (…t)
+// device and cursor, colours, modes ($y), keyboard flags (?â€¦u), window size (â€¦t)
 // and version (a DCS string). They are no reason to think the agent was given
 // work. A key under the kitty keyboard protocol ends in u too, but never has ?.
 var terminalReports = regexp.MustCompile(`^(?:\x1b\[[IO]|\x1b\[[?>]?[0-9;]*[cRn]|\x1b\[\??[0-9;]*\$y|\x1b\[\?[0-9]*u|\x1b\[[0-9;]+t|\x1b\][0-9]+;[^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+$`)
@@ -612,7 +619,7 @@ const inputQueueDepth = 256
 // inputWriter writes one terminal's input from one connection in arrival order,
 // off the connection's read loop. A keystroke waiting on a held fence
 // (HoldInput) then stalls only that terminal, not the connection's other
-// terminals, resizes, or pongs — the desktop app multiplexes every terminal
+// terminals, resizes, or pongs â€” the desktop app multiplexes every terminal
 // over one connection. Closing the terminal retires its writer; it exits once
 // its queue drains.
 type inputWriter struct {
@@ -755,8 +762,8 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 	}
 	c.mu.Unlock()
 
-	// a is captured by onExit before assignment; safe because the attach loop —
-	// the only thing that fires onExit — starts after the registration below.
+	// a is captured by onExit before assignment; safe because the attach loop â€”
+	// the only thing that fires onExit â€” starts after the registration below.
 	var a *attachment
 	a = newAttachment(id, ports.RuntimeHandle{ID: id}, c.mgr.src,
 		func() {
@@ -792,7 +799,7 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 
 	// Register with the shared-terminal arbiter, which sizes the attach Stream to
 	// the authoritative grid (the open frame's rows/cols become this client's
-	// requested size). An empty role means primary — the size-driving client.
+	// requested size). An empty role means primary â€” the size-driving client.
 	c.mgr.joinTerminal(id, c, a, cols, rows, role != roleSecondary)
 
 	go func() {
