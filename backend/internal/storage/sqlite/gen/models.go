@@ -697,6 +697,23 @@ type Review struct {
 	IsArchived             bool
 }
 
+type ReviewPublicationAttempt struct {
+	RunID            string
+	SessionID        string
+	PRURL            string
+	TargetSha        string
+	Verdict          string
+	Body             string
+	ClaimID          string
+	State            string
+	AttemptCount     int64
+	AttemptedAt      time.Time
+	ProviderReviewID string
+	ProviderState    string
+	ProviderURL      string
+	CompletedAt      sql.NullTime
+}
+
 type ReviewRun struct {
 	ID               string
 	ReviewID         string
@@ -800,6 +817,28 @@ type Session struct {
 	DisplayNameExplicit              bool
 	AcceptedDeliveryID               string
 	AcceptedDeliveryLaunchID         string
+}
+
+type SessionAdmissionQueue struct {
+	ID          string
+	ProjectID   string
+	Operation   string
+	SessionID   string
+	Payload     string
+	State       string
+	Generation  int64
+	Owner       string
+	Attempts    int64
+	FailureCode string
+	CreatedAt   string
+	UpdatedAt   string
+	AvailableAt string
+}
+
+type SessionAdmissionSetting struct {
+	ID         int64
+	LimitsJson string
+	UpdatedAt  string
 }
 
 type SessionAgentAccount struct {

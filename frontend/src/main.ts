@@ -94,7 +94,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
-import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
+import { createListenPortScanner, defaultRunFilePath, parseRunFile, windowsSupervisorAddress } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
 import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
 import {
@@ -564,7 +564,7 @@ const isDev = !app.isPackaged;
 // Dev mode uses a separate port and state subdirectory so it never collides with
 // a concurrently running installed-app daemon. The subdir also isolates supervise.sock
 // on Unix (backend derives it as dir(RunFilePath)/supervise.sock) and the named pipe
-// on Windows (supervisorPipeFromRunFile derives it from the same dir basename).
+// on Windows (the daemon publishes its complete-root-scoped pipe locator).
 const DEV_DAEMON_PORT = 3002;
 const DEV_STATE_SUBDIR = "dev"; // ~/.ao/dev/
 
@@ -1932,13 +1932,6 @@ function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): stri
  * headless `ao start` daemons stay unlinked so they remain persistent after
  * app quit.
  */
-function supervisorPipeFromRunFile(rfp: string | null): string {
-	if (!rfp) return "\\\\.\\pipe\\ao-supervise";
-	const dir = path.basename(path.dirname(rfp));
-	if (dir === ".ao" || dir === "." || dir === "") return "\\\\.\\pipe\\ao-supervise";
-	return "\\\\.\\pipe\\ao-supervise-" + dir.replace(/[^a-zA-Z0-9-]/g, "-");
-}
-
 function dropBrowserRuntimeLink(): void {
 	browserRuntimeLink?.dispose();
 	browserRuntimeLink = null;
@@ -2113,9 +2106,17 @@ function establishBrowserStreamLink(): void {
 
 function establishSupervisorLink(): void {
 	const rfp = runFilePath();
+	let runInfo: ReturnType<typeof parseRunFile> = null;
+	if (rfp && process.platform === "win32") {
+		try {
+			runInfo = parseRunFile(readFileSync(rfp, "utf8"));
+		} catch {
+			// An absent/stale handshake must not select a shared default pipe.
+		}
+	}
 	const addr =
 		process.platform === "win32"
-			? supervisorPipeFromRunFile(rfp)
+			? windowsSupervisorAddress(runInfo)
 			: rfp
 				? path.join(path.dirname(rfp), "supervise.sock")
 				: null;
@@ -2125,7 +2126,7 @@ function establishSupervisorLink(): void {
 			log: (msg) => console.log(`AO: ${msg}`),
 		});
 	} else {
-		console.warn("AO: supervisor link skipped; run-file path unavailable");
+		console.warn("AO: supervisor link skipped; exact owned listener address unavailable");
 	}
 }
 

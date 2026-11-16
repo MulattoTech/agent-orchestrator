@@ -265,13 +265,27 @@ func (s *Store) updateReportClaim(ctx context.Context, id, token string, at time
 	return rec, err == nil, err
 }
 
-// RequeueClaimedReports atomically recovers claims owned by a prior daemon process.
+// RequeueClaimedReports atomically recovers claims owned by a prior daemon.
+// A batch already attached to a durable message becomes acknowledged; only
+// unaccepted claims return to pending. The count includes both recovery outcomes.
 func (s *Store) RequeueClaimedReports(ctx context.Context) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	count, err := s.qw.RequeueClaimedReports(ctx)
+	var count int64
+	err := s.inTx(ctx, "recover report claims", func(q *gen.Queries) error {
+		accepted, err := q.RecoverAcceptedReportClaims(ctx, nullTime(time.Now().UTC()))
+		if err != nil {
+			return err
+		}
+		pending, err := q.RequeueClaimedReports(ctx)
+		if err != nil {
+			return err
+		}
+		count = accepted + pending
+		return nil
+	})
 	if err != nil {
-		return 0, fmt.Errorf("requeue claimed reports: %w", err)
+		return 0, fmt.Errorf("recover claimed reports: %w", err)
 	}
 	return count, nil
 }

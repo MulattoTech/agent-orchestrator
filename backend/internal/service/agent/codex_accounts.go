@@ -113,6 +113,7 @@ type accountLoginOperation struct {
 }
 
 type codexAccountManager struct {
+	background        *backgroundWork
 	ctx               context.Context
 	catalog           *codexAccountCatalog
 	factory           ports.CodexAccountClientFactory
@@ -166,7 +167,8 @@ func newCodexAccountManager(ctx context.Context, accountRoot, pendingRoot, switc
 		operationGate = operationGates[0]
 	}
 	m := &codexAccountManager{
-		ctx: ctx, catalog: newCodexAccountCatalog(accountRoot, logger), factory: factory, operationGate: operationGate,
+		background: &backgroundWork{},
+		ctx:        ctx, catalog: newCodexAccountCatalog(accountRoot, logger), factory: factory, operationGate: operationGate,
 		logger: logger, now: func() time.Time { return time.Now().UTC() }, newID: uuid.NewString,
 		after:     time.After,
 		processes: make(chan struct{}, codexAccountProcessLimit), mutations: make(chan struct{}, 1), executable: os.Executable,
@@ -470,7 +472,7 @@ func (m *codexAccountManager) ensureAuthentication(ctx context.Context, record c
 		state.call = call
 		m.catalog.updateSnapshot(record.Snapshot.ID, func(s *domain.CodexAccountSnapshot) { s.Authentication.Freshness = domain.AgentReadinessChecking })
 		m.mu.Unlock()
-		go m.runAuthentication(record, call)
+		m.background.Go(func() { m.runAuthentication(record, call) })
 		select {
 		case <-call.done:
 			if call.retry {
@@ -773,7 +775,7 @@ func (m *codexAccountManager) ensureUsage(ctx context.Context, record codexAccou
 	call := make(chan struct{})
 	state.call = call
 	m.mu.Unlock()
-	go m.runUsage(record, state, call)
+	m.background.Go(func() { m.runUsage(record, state, call) })
 	select {
 	case <-call:
 		return nil
@@ -927,7 +929,7 @@ func (m *codexAccountManager) subscribe(ctx context.Context) <-chan CodexAccount
 	m.subscribers[ch] = struct{}{}
 	m.mu.Unlock()
 	ch <- m.cached()
-	go func() { <-ctx.Done(); m.mu.Lock(); delete(m.subscribers, ch); close(ch); m.mu.Unlock() }()
+	m.background.Go(func() { <-ctx.Done(); m.mu.Lock(); delete(m.subscribers, ch); close(ch); m.mu.Unlock() })
 	return ch
 }
 func (m *codexAccountManager) publish() {

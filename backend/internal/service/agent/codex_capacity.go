@@ -152,7 +152,7 @@ func (c *codexCapacityCoordinator) ensureOne(ctx context.Context, record codexAc
 	c.mu.Unlock()
 	c.publish(record.Snapshot.ID, &checking)
 	c.logger.Info("started Codex account capacity read", "account_id", record.Snapshot.ID, "source", record.Snapshot.Source, "trigger", "display", "cache", "new")
-	go c.runRead(record, call, attemptedAt)
+	c.manager.background.Go(func() { c.runRead(record, call, attemptedAt) })
 	select {
 	case <-call.done:
 		if call.retry {
@@ -582,7 +582,7 @@ func (c *codexCapacityCoordinator) scheduleResetInvalidation(accountID string, g
 	if delay <= 0 {
 		delay = time.Millisecond
 	}
-	go func() {
+	c.manager.background.Go(func() {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		select {
@@ -604,7 +604,7 @@ func (c *codexCapacityCoordinator) scheduleResetInvalidation(accountID string, g
 		current := state.snapshot
 		c.mu.Unlock()
 		c.publish(accountID, &current)
-	}()
+	})
 }
 
 func nearestCapacityReset(snapshot domain.CodexCapacitySnapshot) *time.Time {

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -63,6 +64,7 @@ func reviewErrorKind(err error) string {
 
 // Manager is the reviews surface the HTTP controller depends on.
 type Manager interface {
+	Publish(context.Context, domain.SessionID, string) (PublicationResult, error)
 	RecoverChatReviewers(ctx context.Context) error
 	TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error)
 	RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error
@@ -82,6 +84,9 @@ type Manager interface {
 
 // Service is the API-facing review service. It delegates to the core engine.
 type Service struct {
+	publisher          ports.SCMReviewPublisher
+	publicationMu      sync.Mutex
+	publicationLocks   map[string]*publicationLock
 	engine             *reviewcore.Engine
 	store              Store
 	requester          ports.SCMReviewRequester
@@ -896,6 +901,8 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 	if verdict == domain.VerdictChangesRequested && body == "" {
 		return domain.ReviewRun{}, fmt.Errorf("%w: a changes_requested review requires a body", ErrInvalid)
 	}
+	unlock := s.lockPublication(runID)
+	defer unlock()
 	run, ok, err := s.store.GetReviewRun(ctx, runID)
 	if err != nil {
 		return domain.ReviewRun{}, err
@@ -916,7 +923,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if !found {
 			return domain.ReviewRun{}, fmt.Errorf("%w: worker session %q", ErrNotFound, workerID)
 		}
-		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, githubReviewID, session.AutoInjectReview)
+		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, "", session.AutoInjectReview)
 		if err != nil {
 			return domain.ReviewRun{}, err
 		}
@@ -926,11 +933,8 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		run.Status = domain.ReviewRunComplete
 		run.Verdict = verdict
 		run.Body = body
-		run.GithubReviewID = githubReviewID
+		run.GithubReviewID = ""
 		run.AutoInjectReview = session.AutoInjectReview
-		if githubReviewID != "" && s.reviewRefresher != nil {
-			s.reviewRefresher.RequestReviewRefresh(run.PRURL)
-		}
 		// Only on the real running -> complete transition. Re-submitting an
 		// already-complete run returns early below, so telemetry stays idempotent
 		// the same way the store does.
@@ -938,7 +942,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 			"harness":            string(run.Harness),
 			"verdict":            string(verdict),
 			"duration_ms":        s.clock().Sub(run.CreatedAt).Milliseconds(),
-			"posted_to_provider": githubReviewID != "",
+			"posted_to_provider": false, // Receipt verification follows durable local submission.
 			// Which pass produced this verdict. A manual and an automatic review
 			// mean different things about how the feature is being used, and the
 			// verdict split between them is the whole question.
@@ -951,22 +955,35 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 			// all, recorded at the moment it is snapshotted onto the run.
 			"auto_inject": session.AutoInjectReview,
 		})
-	case domain.ReviewRunComplete:
+	case domain.ReviewRunComplete, domain.ReviewRunDelivered:
 		if run.Verdict != verdict {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded verdict %q", ErrInvalid, runID, run.Verdict)
 		}
 		if body != "" && body != run.Body {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded a different body", ErrInvalid, runID)
 		}
-		if githubReviewID != "" && githubReviewID != run.GithubReviewID {
-			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded GitHub review id %q", ErrInvalid, runID, run.GithubReviewID)
-		}
-	case domain.ReviewRunDelivered:
-		return run, nil
 	default:
 		return domain.ReviewRun{}, fmt.Errorf("%w: review run %q is not running", errRunSuperseded, runID)
 	}
 	s.emitReviewNotification(ctx, run)
+	if githubReviewID != "" && githubReviewID != run.GithubReviewID {
+		if run.GithubReviewID != "" {
+			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded GitHub review id %q", ErrInvalid, runID, run.GithubReviewID)
+		}
+		// The local verdict was saved before publication. Verify the
+		// receipt on the exact reviewed commit before filling the field;
+		// this mode cannot create a new provider review.
+		receipt, err := s.publishSaved(ctx, run, githubReviewID)
+		if err != nil {
+			return domain.ReviewRun{}, err
+		}
+		if receipt.ReviewID != githubReviewID {
+			return domain.ReviewRun{}, fmt.Errorf("%w: mismatched publication receipt", ErrInvalid)
+		}
+		if err := s.recordPublication(ctx, &run, receipt); err != nil {
+			return domain.ReviewRun{}, err
+		}
+	}
 	return run, nil
 }
 

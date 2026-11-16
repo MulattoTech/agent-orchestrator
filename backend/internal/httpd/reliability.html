@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AO fleet reliability</title>
+<style>
+:root{color-scheme:dark;font:16px system-ui;background:#10151e;color:#e8edf7}body{max-width:1180px;margin:40px auto;padding:0 24px}h1{font-size:32px;margin-bottom:8px}h2{font-size:21px;margin-top:32px}p{color:#aebed2;line-height:1.6}small{color:#aebed2}section{background:#182231;border:1px solid #304156;border-radius:12px;padding:22px;margin:20px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:16px}.metric{background:#101a28;border-radius:8px;padding:16px}.value{font-size:28px;font-weight:700;margin-top:8px}label{display:block;color:#bbcbdf}input,select,button{font:inherit;color:inherit;background:#0d1929;border:1px solid #546a87;border-radius:6px;padding:10px}input[type=number]{width:95px;display:block;margin-top:8px}select{display:block;margin-top:8px}button{cursor:pointer;background:#245bd0;margin:12px 8px 0 0}button.danger{background:#932d38}button.secondary{background:#293d58}table{border-collapse:collapse;width:100%;font-size:14px}td,th{text-align:left;padding:10px;border-bottom:1px solid #304156}th{color:#b6c8df}#notice{color:#ffd28b;white-space:pre-wrap}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px ui-monospace}details{margin-top:18px}.table-wrap{overflow-x:auto}.pill{display:inline-block;background:#293d58;padding:6px 10px;border-radius:20px}#stamp{font-size:13px}
+</style>
+<h1>AO fleet reliability</h1><p>Independent worker and inference controls. All observations come from local state and operating-system counters.</p>
+<p><span id="status" class="pill">Loading local state</span> <span id="stamp"></span></p><p id="notice" role="status"></p>
+<section><div class="grid" id="metrics"></div><p id="quality"></p></section>
+<section><h2>Worker occupancy</h2><p>Lowering a cap prevents expansion and preserves existing work. Pausing the queue retains waiting tasks.</p>
+<form id="workerForm"><div class="grid">
+<label>Registered slots<select id="slots"><option>2</option><option>4</option><option>8</option><option>16</option><option>20</option><option>30</option><option>40</option></select></label>
+<label>Active worker cap<input id="workers" type="number" min="1" max="40" required></label>
+<label>Default project cap<input id="projectWorkers" type="number" min="1" max="40" required></label>
+<label>Dispatch queued work<input id="queueEnabled" type="checkbox"></label>
+</div><button>Save worker controls</button></form></section>
+<section><h2>Inference</h2><p>These caps apply separately to provider turns. The quota latch and reasoning policy remain enforced. An emergency stop blocks new dispatch and requests interruption of governed active turns; provider acknowledgment may be unavailable.</p>
+<form id="inferenceForm"><div class="grid">
+<label>Simultaneous turns<input id="inference" type="number" min="1" max="40" required></label>
+<label>Turns per project<input id="projectInference" type="number" min="1" max="40" required></label>
+<label>Concurrent reviewers<input id="reviewers" type="number" min="1" max="40" required></label>
+</div><button>Save inference controls</button></form>
+<button id="pause" class="secondary">Pause new turns</button><button id="unpause" class="secondary">Resume within policy</button><button id="emergency" class="danger">Emergency stop</button>
+<button id="verifyAllowance" class="secondary" disabled>Verify allowance without a model turn</button><button id="releaseEmergency" class="secondary">Release emergency stop</button><p id="quota"></p></section>
+<section><h2>Measured usage</h2><p>Native response receipts are deduplicated. Cached tokens are included in input tokens. Subscription allowance, dollar cost, and idle waste stay unknown when unmeasured.</p>
+<div class="table-wrap"><table><thead><tr><th>Model / effort</th><th>AO turns</th><th>Failed</th><th>Receipts</th><th>Uncached input</th><th>Cached input</th><th>Output</th><th>Reasoning within output</th></tr></thead><tbody id="models"></tbody></table></div>
+<h3>Usage by session</h3><p>PR outcomes are associated with a session; they do not prove which model caused a result. Accepted requirements, protected-branch verification, and productive-action latency remain unknown without authoritative evidence.</p>
+<div class="table-wrap"><table><thead><tr><th>Session / project</th><th>Model / effort</th><th>Turns / failed / uncertain</th><th>Receipts</th><th>Input / cached / output</th></tr></thead><tbody id="sessionUsage"></tbody></table></div>
+<p id="outcomes"></p><details><summary>Dispatch provenance, recovery, and observation details</summary><pre id="details"></pre></details></section>
+<section><h2>Durable queue</h2><p>Only IDs and scheduling state appear here. Task prompts and report content remain private.</p><div id="queue"></div></section>
+<script>
+let last,editing=false;
+const by=id=>document.getElementById(id), known=v=>v===null||v===undefined?'Unknown':typeof v==='number'?v.toLocaleString():String(v);
+const receiptValue=(count,value)=>Number.isInteger(count)&&count>0?value:null;
+function cell(row,v){const td=document.createElement('td');td.textContent=known(v);row.append(td)}
+async function api(path,method,body){const r=await fetch('/internal/reliability'+path,{method,headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});if(!r.ok)throw Error(await r.text());return r.status===204?null:await r.json()}
+function render(d){
+ last=d;const a=d.admission||{},q=d.inference||{},l=a.limits||{};
+ by('status').textContent=q.policy_stop?'Policy violation':q.emergency_stop?'Emergency stop':q.latched_stop?'Quota blocked':q.paused?'Paused':q.quota||'Quota unknown';
+ by('stamp').textContent='Observed '+known(d.observedAt);
+ by('metrics').replaceChildren();
+ for(const [title,value] of [['Registered slots',l.registeredSlots],['Active worker sessions',a.activeWorkerSessions],['Provisioning',a.provisioningWorkers],['Owned setup/cleanup shells',d.workspaceScripts?.activeShells],['Running tool processes',a.runningToolProcesses],['Queued tasks',a.queuedRequests],['Active inference',q.active],['Uncertain inference',q.uncertain],['Resource ceiling',a.resourceWorkerCeiling]]){
+  const m=document.createElement('div');m.className='metric';const label=document.createElement('small');label.textContent=title;const v=document.createElement('div');v.className='value';v.textContent=known(value);m.append(label,v);by('metrics').append(m)
+ }
+ by('quality').textContent=known(q.telemetry_confidence)+' Host policy: '+known(d.pressure?.reason)+'. Controller liveness: '+known(d.controllerHealth?.status);
+ if(!editing){by('slots').value=l.registeredSlots||40;by('workers').value=l.maxActiveWorkers||4;by('projectWorkers').value=l.defaultProjectWorkers||4;by('queueEnabled').checked=!!l.queueEnabled;by('inference').value=q.inference_cap||1;by('projectInference').value=q.project_cap||1;by('reviewers').value=q.reviewer_cap||1}
+ by('verifyAllowance').disabled=!d.allowanceCheckEnabled;by('quota').textContent='Provider quota: '+known(q.quota)+'. Reset hint: '+(q.reset_at||'Unknown')+'; source: '+(q.reset_source||'Unknown')+'. Local turn budget remaining: '+known(q.conservative_turns_remaining)+'; reserved turns: '+known(q.reserve_turns)+'. A clock reaching the hint never clears quota.';
+ by('models').replaceChildren();
+ for(const m of q.models||[]){const tr=document.createElement('tr');for(const v of [m.model+' / '+m.effort,m.turns,m.failed,m.receipts,receiptValue(m.receipts,m.input_tokens-m.cached_input_tokens),receiptValue(m.receipts,m.cached_input_tokens),receiptValue(m.receipts,m.output_tokens),receiptValue(m.receipts,m.reasoning_output_tokens)])cell(tr,v);by('models').append(tr)}
+ by('sessionUsage').replaceChildren();
+ for(const m of d.sessionUsage||[]){const tr=document.createElement('tr');for(const v of [m.session_id+' / '+(m.project_id||'Unknown'),m.model+' / '+m.effort,m.dispatched_turns+' / '+m.failed_turns+' / '+m.uncertain_turns,m.response_receipts,known(receiptValue(m.response_receipts,m.input_tokens))+' / '+known(receiptValue(m.response_receipts,m.cached_input_tokens))+' / '+known(receiptValue(m.response_receipts,m.output_tokens))])cell(tr,v);by('sessionUsage').append(tr)}
+ by('outcomes').textContent='Merged tracked PRs: '+known(d.mergedPRs)+'. Accepted requirements: '+known(d.acceptedRequirements)+'. Idle inference waste: '+known(d.idleWaste)+'. Retry attribution: '+known(d.retryAttribution);
+ by('details').textContent=JSON.stringify({pressure:d.pressure,handleObservation:d.handleObservation,receipts:d.receipts,provenance:d.dispatches,health:d.controllerHealth,workspaceScripts:d.workspaceScripts,sessionOutcomes:d.sessionOutcomes,sessionOutcomesAvailable:d.sessionOutcomesAvailable,errors:d.errors},null,2);
+ by('queue').replaceChildren();
+ for(const item of d.queue||[]){const p=document.createElement('p');p.textContent=item.id+' · '+item.projectId+' · '+item.state+' · attempts '+known(item.attempts);if(item.state==='queued'||item.state==='blocked'){const b=document.createElement('button');b.className='secondary';b.textContent='Cancel';b.onclick=()=>act(()=>api('/queue/'+encodeURIComponent(item.id)+'/cancel','POST',{}));p.append(b)}by('queue').append(p)}
+}
+async function refresh(){try{render(await api('','GET'))}catch(e){by('notice').textContent=e.message}}
+async function act(fn){by('notice').textContent='Saving…';try{await fn();editing=false;by('notice').textContent='Saved. Quota and policy gates remain active.';await refresh()}catch(e){by('notice').textContent=e.message}}
+for(const el of document.querySelectorAll('input,select'))el.addEventListener('input',()=>editing=true);
+by('workerForm').onsubmit=e=>{e.preventDefault();act(()=>api('/workers','PUT',{...(last?.admission?.limits||{}),registeredSlots:+by('slots').value,maxActiveWorkers:+by('workers').value,defaultProjectWorkers:+by('projectWorkers').value,queueEnabled:by('queueEnabled').checked}))};
+by('inferenceForm').onsubmit=e=>{e.preventDefault();act(()=>api('/inference','PUT',{maximum_inference:+by('inference').value,maximum_per_project:+by('projectInference').value,maximum_reviewers:+by('reviewers').value}))};
+by('pause').onclick=()=>act(()=>api('/inference','PUT',{pause:true}));
+by('unpause').onclick=()=>act(()=>api('/inference','PUT',{pause:false}));
+by('verifyAllowance').onclick=()=>act(()=>api('/allowance/verify','POST',{verify:true}));
+by('releaseEmergency').onclick=()=>act(()=>api('/inference','PUT',{emergency_stop:false}));
+by('emergency').onclick=()=>act(()=>api('/inference','PUT',{emergency_stop:true}));
+refresh();setInterval(refresh,15000);
+</script></html>

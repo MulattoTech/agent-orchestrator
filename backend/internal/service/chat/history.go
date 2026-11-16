@@ -332,6 +332,7 @@ func (s *Service) EditMessage(
 					err = prepareErr
 				} else {
 					provider, err = driver.Resume(operationCtx, ports.ChatResumeConfig{
+						PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 						SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
 						DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 						Model: cfg.Model, Effort: cfg.Effort,
@@ -372,6 +373,7 @@ func (s *Service) EditMessage(
 				err = prepareErr
 			} else {
 				provider, err = driver.Start(operationCtx, ports.ChatStartConfig{
+					PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 					SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 					Env: launchEnv, Model: cfg.Model, Effort: cfg.Effort,
 					Permissions:  cfg.Permissions,
@@ -445,7 +447,7 @@ func (s *Service) EditMessage(
 	}
 	conversation := source.conversation
 	conversation.ActiveBranchID = branchID
-	replacement := newController(id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
+	replacement := newController(id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader, s.sessionFileSnapshotCapture(id))
 	replacement.artifactDir = source.artifactDir
 	if err := s.store.CreateAndActivateConversationBranch(
 		operationCtx, id, branch, generation, s.now(),
@@ -950,6 +952,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 		return "", err
 	}
 	provider, err := driver.Resume(operationCtx, ports.ChatResumeConfig{
+		PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 		SessionID: cfg.SessionID, ProviderConversationID: branch.ProviderConversationID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 		Model: cfg.Model, Effort: cfg.Effort,
@@ -971,7 +974,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	generation := s.newID()
 	conversation := source.conversation
 	conversation.ActiveBranchID = branch.ID
-	replacement := newController(id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
+	replacement := newController(id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader, s.sessionFileSnapshotCapture(id))
 	replacement.artifactDir = source.artifactDir
 	if err := s.store.ActivateConversationBranch(operationCtx, id, conversation.ID, branch.ID,
 		branch.ProviderConversationID, generation, s.now()); err != nil {
@@ -1060,6 +1063,7 @@ func (s *Service) restoreClosedSourceController(
 	conversation := source.conversation
 	conversation.Settings = source.Settings()
 	provider, err := driver.Resume(recoveryCtx, ports.ChatResumeConfig{
+		PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 		SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
 		// A branch whose agent never answered may have no native session to resume.
 		FreshIfMissing: s.branchUnanswered(recoveryCtx, id, conversation.ID, branch),
@@ -1088,7 +1092,7 @@ func (s *Service) restoreClosedSourceController(
 	generation := s.newID()
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(
-		id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
+		id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader, s.sessionFileSnapshotCapture(id))
 	replacement.artifactDir = source.artifactDir
 	if err := s.store.ActivateConversationBranch(recoveryCtx, id, conversation.ID, branch.ID,
 		providerConversationID, generation, s.now()); err != nil {

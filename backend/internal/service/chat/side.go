@@ -740,6 +740,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		if forker, ok := driver.(ports.ChatIsolatedForker); ok {
 			anchor := side.NativeAnchorID
 			forkConfig := ports.ChatStartConfig{
+				PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 				SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
 				WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 				Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
@@ -783,6 +784,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 	}
 	if conv == nil && providerID != "" {
 		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{
+			PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 			SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: providerID,
 			DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
 			Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,
@@ -792,6 +794,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		})
 	} else if conv == nil {
 		conv, err = driver.Start(ctx, ports.ChatStartConfig{
+			PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 			SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
 			WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 			Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly,
@@ -914,6 +917,7 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 		return
 	}
 	conv, err := driver.Resume(ctx, ports.ChatResumeConfig{
+		PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 		SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: side.ProviderForkID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
 		Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,

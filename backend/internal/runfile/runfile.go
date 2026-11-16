@@ -42,6 +42,9 @@ type Info struct {
 	// BrowserStreamAddress is the private Electron media socket locator. It is
 	// authenticated with the same per-launch token as the command runtime.
 	BrowserStreamAddress string `json:"browserStreamAddress,omitempty"`
+	// SupervisorAddress is the exact bound watchdog locator. Windows clients
+	// must not reconstruct a basename-only fallback for another state root.
+	SupervisorAddress string `json:"supervisorAddress,omitempty"`
 }
 
 // Write atomically writes running.json at path, creating parent directories

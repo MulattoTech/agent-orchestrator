@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -44,6 +45,13 @@ var approvalMethods = map[string]domain.ActivityKind{
 
 // conversation is one live Codex thread. It is the only writer to that thread.
 type conversation struct {
+	guard                                 *inferenceguard.Gate
+	guardSession, guardProject, guardRole string
+	guardRequest                          string // guarded by mu; durable attempt identity
+	guardTurn                             string
+	guardCompleted                        map[string]string
+	guardUnsubscribe                      func()
+
 	conn *conn
 	proc *process
 	log  *slog.Logger
@@ -196,6 +204,7 @@ func (c *conversation) pump() {
 		// normalizer that reads the clock itself cannot be tested deterministically.
 		for _, ev := range normalizeNotification(n, now) {
 			ev = usageLimits.decorate(ev, now)
+
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
 				threadID = scope.ThreadID
@@ -203,6 +212,9 @@ func (c *conversation) pump() {
 			if threadID == "" {
 				threadID = c.threadID
 			}
+			guardEvent := ev
+			guardEvent.ProviderConversationID = threadID
+			c.observeGuardEvent(guardEvent)
 			var visible bool
 			ev, visible = citations.formatEvent(threadID, ev)
 			if !visible {
@@ -355,6 +367,14 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
+	selection, guardErr := c.resolveGuardSelection(ctx, msg.Settings.Model, msg.Settings.Effort)
+	if guardErr != nil {
+		return ports.ChatTurnRef{}, guardErr
+	}
+	if c.guard != nil {
+		msg.Settings.Model = selection.Model
+		msg.Settings.Effort = selection.Effort
+	}
 	params := map[string]any{
 		"threadId": c.threadID,
 		"input":    []any{map[string]any{"type": "text", "text": msg.Text}},
@@ -395,8 +415,34 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
-	if err := c.conn.request(ctx, "turn/start", params, &resp); err != nil {
+	requestID := msg.ClientMessageID
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+	requestID = c.guardSession + ":" + requestID
+	if err := c.guardedRequest(ctx, requestID, "turn/start", params, &resp, selection); err != nil {
 		return ports.ChatTurnRef{}, fmt.Errorf("turn/start: %w", err)
+	}
+	if c.guard != nil {
+		if err := c.guard.Bind(context.WithoutCancel(ctx), requestID, resp.Turn.ID); err != nil {
+			return ports.ChatTurnRef{}, fmt.Errorf("bind guarded provider turn: %w", err)
+		}
+		c.mu.Lock()
+		completedClass, completed := c.guardCompleted[resp.Turn.ID]
+		if c.guardRequest == requestID {
+			c.guardTurn = resp.Turn.ID
+		}
+		if completed && c.guardRequest == requestID {
+			c.guardRequest = ""
+			c.guardTurn = ""
+		}
+		c.mu.Unlock()
+		c.interruptIfGuardStopped()
+		if completed {
+			if err := c.guard.Complete(context.WithoutCancel(ctx), c.guardSession, resp.Turn.ID, completedClass); err != nil {
+				return ports.ChatTurnRef{}, err
+			}
+		}
 	}
 	c.fastTier = msg.Settings.Fast
 	c.planMode = planMode
@@ -580,7 +626,11 @@ func (c *conversation) ReadRateLimits(ctx context.Context) (ports.ChatRateLimits
 		return ports.ChatRateLimits{}, fmt.Errorf("account/rateLimits/read: %w", err)
 	}
 	observedAt := time.Now().UTC()
-	return chatRateLimitsFromCapacity(capacityObservationFromEnvelope(resp, observedAt, false), observedAt), nil
+	limits := chatRateLimitsFromCapacity(capacityObservationFromEnvelope(resp, observedAt, false), observedAt)
+	if c.guard != nil {
+		c.observeGuardEvent(ports.ChatEvent{RateLimits: &limits})
+	}
+	return limits, nil
 }
 
 // Compact asks the provider to summarize earlier history and reclaim context.
@@ -597,6 +647,12 @@ func (c *conversation) ReadRateLimits(ctx context.Context) (ports.ChatRateLimits
 // the timeline. Blocking here would hold the controller's dispatch lock for the
 // duration and make the whole conversation unresponsive while it ran.
 func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult, error) {
+	if c.guard != nil {
+		if err := c.guard.Check(ctx); err != nil {
+			return ports.ChatCompactionResult{}, err
+		}
+		return ports.ChatCompactionResult{}, &inferenceguard.Refusal{Code: inferenceguard.ErrPolicy, Reason: "explicit compaction has no per-request model/effort envelope; strict policy refuses an unverifiable billable path"}
+	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
@@ -1034,6 +1090,9 @@ func (c *conversation) failPendingApprovals() {
 // Close releases the controller without touching provider-side history.
 func (c *conversation) Close() error {
 	c.closeOnce.Do(func() {
+		if c.guardUnsubscribe != nil {
+			c.guardUnsubscribe()
+		}
 		if c.proc.terminate == nil {
 			c.failPendingApprovals()
 		}
@@ -1048,6 +1107,9 @@ func (c *conversation) Close() error {
 // daemon-wide shutdown; explicit session/controller replacement calls this.
 func (c *conversation) Terminate() error {
 	c.closeOnce.Do(func() {
+		if c.guardUnsubscribe != nil {
+			c.guardUnsubscribe()
+		}
 		c.failPendingApprovals()
 		if c.proc.terminate != nil {
 			c.closeErr = c.proc.terminate()

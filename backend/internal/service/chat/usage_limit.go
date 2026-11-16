@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -222,6 +223,28 @@ func permanentUsageLimitResumeError(err error) bool {
 func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if inferenceguard.Enabled() {
+		gate, err := inferenceguard.ForDataDir(s.dataDir)
+		if err != nil {
+			return err
+		}
+		if err := gate.Check(ctx); err != nil {
+			if inferenceguard.PreDispatchRefusal(err) {
+				return nil
+			}
+			return err
+		}
+		if err := s.resumeGuardedQueues(ctx, gate); err != nil {
+			return err
+		}
+		// Recheck after draining: that work may have consumed the remaining budget.
+		if err := gate.Check(ctx); err != nil {
+			if inferenceguard.PreDispatchRefusal(err) {
+				return nil
+			}
+			return err
+		}
 	}
 	store, ok := s.store.(usageLimitStore)
 	if !ok {

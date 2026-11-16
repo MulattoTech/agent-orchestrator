@@ -154,6 +154,11 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 			return ErrQueuedContentInvalid
 		}
 	}
+	_, legacyContext := splitLegacyWorkerReports(message.Text)
+	content = retainLegacyWorkerReports(content, legacyContext)
+	if authored, submittedContext := splitLegacyWorkerReports(edit.Text); legacyContext != "" && submittedContext == legacyContext {
+		edit.Text = authored
+	}
 	if edit.RetainedContent != nil {
 		if edit.ExpectedRevision == nil {
 			return ErrQueuedContentInvalid

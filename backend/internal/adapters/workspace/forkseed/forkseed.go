@@ -207,16 +207,20 @@ func SnapshotHead(ctx context.Context, workspace, ref string) (string, error) {
 // Delete removes the seed ref. A missing ref is not an error. Only refs the
 // fork created are deleted; a borrowed snapshot under another prefix is kept.
 func Delete(ctx context.Context, workspace, ref string) error {
+	return deleteWithRunner(ctx, workspace, ref, run)
+}
+
+func deleteWithRunner(ctx context.Context, workspace, ref string, command Runner) error {
 	if ref == "" {
 		return nil
 	}
 	if !strings.HasPrefix(ref, RefPrefix) && !strings.HasPrefix(ref, BasePrefix) {
 		return fmt.Errorf("forkseed: refusing to delete %q outside %s", ref, RefPrefix)
 	}
-	if _, err := run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", ref); err != nil {
+	if _, err := command(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", ref); err != nil {
 		return nil //nolint:nilerr // already gone: nothing to delete
 	}
-	if _, err := run(ctx, workspace, nil, "update-ref", "-d", ref); err != nil {
+	if _, err := command(ctx, workspace, nil, "update-ref", "-d", ref); err != nil {
 		return fmt.Errorf("forkseed: delete ref: %w", err)
 	}
 	return nil
@@ -283,7 +287,20 @@ func run(ctx context.Context, dir string, env []string, args ...string) (string,
 // Reap deletes seed refs created more than maxAge before now. A seed lives
 // only while its fork is being created, so an old one is a crash leftover.
 func Reap(ctx context.Context, workspace string, maxAge time.Duration, now time.Time) (int, error) {
-	out, err := run(ctx, workspace, nil, "for-each-ref", "--format=%(refname) %(committerdate:unix)", RefPrefix)
+	return ReapWithRunner(ctx, workspace, maxAge, now, run)
+}
+
+// Runner executes one Git operation. Supplying it explicitly keeps crash
+// cleanup's age and ref validation logic independent of process execution.
+type Runner func(context.Context, string, []string, ...string) (string, error)
+
+// ReapWithRunner runs the same orphan-seed recovery algorithm as Reap using
+// only command. A missing command never selects the native Git runner.
+func ReapWithRunner(ctx context.Context, workspace string, maxAge time.Duration, now time.Time, command Runner) (int, error) {
+	if command == nil {
+		return 0, errors.New("forkseed: reaping requires an explicit command runner")
+	}
+	out, err := command(ctx, workspace, nil, "for-each-ref", "--format=%(refname) %(committerdate:unix)", RefPrefix)
 	if err != nil {
 		return 0, err
 	}
@@ -297,7 +314,7 @@ func Reap(ctx context.Context, workspace string, maxAge time.Duration, now time.
 		if err != nil || now.Sub(time.Unix(seconds, 0)) < maxAge {
 			continue
 		}
-		if err := Delete(ctx, workspace, ref); err != nil {
+		if err := deleteWithRunner(ctx, workspace, ref, command); err != nil {
 			return removed, err
 		}
 		removed++

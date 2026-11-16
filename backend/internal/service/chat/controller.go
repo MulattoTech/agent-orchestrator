@@ -28,6 +28,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -219,7 +220,8 @@ type Controller struct {
 	harness      domain.AgentHarness
 	// workspacePath is the worktree whose files are snapshotted before each turn
 	// and restored by a rollback.
-	workspacePath string
+	workspacePath       string
+	fileSnapshotCapture filesnapshot.CaptureFunc
 
 	conv                   ports.ChatConversation
 	store                  Store
@@ -413,6 +415,7 @@ func newController(
 	prChanged func(domain.SessionID),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
+	capture filesnapshot.CaptureFunc,
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
@@ -421,6 +424,7 @@ func newController(
 		generation:             generation,
 		harness:                harness,
 		workspacePath:          workspacePath,
+		fileSnapshotCapture:    capture,
 		conv:                   conv,
 		store:                  store,
 		continuationReader:     reader,
@@ -1112,7 +1116,7 @@ func nativeHistoryMessageText(message domain.ConversationMessage) string {
 	}
 	internal := make([]ports.ChatContent, 0, len(content))
 	for _, block := range content {
-		if block.Type == "file_reference" || block.Type == "excerpt" || (message.Continuation && block.Internal && block.Type == "text") {
+		if block.Type == "file_reference" || block.Type == "excerpt" || (block.Internal && block.Type == "text") {
 			internal = append(internal, block)
 		}
 	}
@@ -1820,10 +1824,15 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	if prompt.ProviderInputText != "" {
-		prompt.Text = prompt.ProviderInputText
+	if authored, legacyContext := splitLegacyWorkerReports(prompt.Text); legacyContext != "" {
+		prompt.Text = authored
+		content = retainLegacyWorkerReports(content, legacyContext)
+		encoded, err := json.Marshal(content)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		prompt.DeliveryContentJSON = string(encoded)
 	}
-
 	now := c.now()
 	newTurnID := c.newID()
 	key := retryClientMessagePrefix + newTurnID
@@ -1861,13 +1870,36 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		return domain.ConversationTurn{}, ErrTurnNotRetryable
 	}
 
-	return c.dispatch(ctx, newTurnID, ports.ChatUserMessage{
+	delivery := ports.ChatUserMessage{
 		Text:            prompt.Text,
 		Continuation:    prompt.Continuation,
 		Content:         content,
 		Origin:          prompt.Origin,
 		ClientMessageID: key,
-	}, now, false, nil)
+	}
+	if prompt.ProviderInputText != "" {
+		// The frozen provider input already contains flattened server context.
+		// Keep authored text on the durable message and never append reports,
+		// continuation context or annotations a second time on retry.
+		delivery.Text = prompt.ProviderInputText
+		delivery.Content = unrenderedRetryContent(content)
+	}
+	return c.dispatch(ctx, newTurnID, delivery, now, false, nil)
+}
+
+// unrenderedRetryContent keeps native blocks that are not already represented
+// in RecordProviderInput. This mirrors excerptDeliveryMessage's flattening.
+func unrenderedRetryContent(content []ports.ChatContent) []ports.ChatContent {
+	out := make([]ports.ChatContent, 0, len(content))
+	for _, item := range content {
+		if item.Internal && item.Type == "text" ||
+			item.Type == "excerpt" && item.Excerpt != nil ||
+			item.Type == "file_reference" && item.FileReference != nil {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // retryPromptContent reconstructs provider-neutral durable prompt blocks and
@@ -2081,6 +2113,24 @@ func (c *Controller) dispatch(
 	c.mu.Unlock()
 	ref, err := c.conv.SendTurn(ctx, msg)
 	if err != nil {
+		if inferenceguard.PreDispatchRefusal(err) && !errors.Is(err, inferenceguard.ErrUncertain) {
+			// This typed refusal proves no provider write happened. Preserve the queue,
+			// reports and authored message; never retry on a timer after quota exhaustion.
+			if requeue, ok := c.store.(interface {
+				RequeueUndispatchedTurns(context.Context, string, []string, string) error
+			}); ok {
+				ids := append([]string{turnID}, followers...)
+				if queueErr := requeue.RequeueUndispatchedTurns(context.WithoutCancel(ctx), c.conversation.ID, ids, err.Error()); queueErr != nil {
+					return domain.ConversationTurn{}, errors.Join(err, queueErr)
+				}
+				c.mu.Lock()
+				c.dispatchingTurnID = ""
+				c.artifactBaseline = nil
+				c.mu.Unlock()
+				return domain.ConversationTurn{ID: turnID, ConversationID: c.conversation.ID, HandledBySessionID: c.sessionID, State: domain.TurnStateQueued, ErrorMessage: err.Error(), RequestedAt: requestedAt}, err
+			}
+		}
+
 		captureChatFault(ctx, err, c.harness, "chat_turn", "send")
 		failFollowers("batch delivery to provider is uncertain: " + err.Error())
 		c.mu.Lock()
@@ -2450,9 +2500,10 @@ func (c *Controller) BeginHandoff(
 	}
 
 	if policy == domain.SessionInterfaceTransitionInterrupt {
-		// Target preflight has succeeded. Settle every accepted queue row while
-		// sendMu and the armed gate make dispatch and explicit promotion impossible.
-		// Local durable state is committed before the external provider side effect.
+		// Target preflight has succeeded. Settle queued commands while sendMu
+		// and the armed gate prevent dispatch. Accepted internal report batches
+		// retain their durable queued turn for a later controlled Chat resume.
+		// Local durable state is committed before the external provider effect.
 		c.sendMu.Lock()
 		c.mu.Lock()
 		active := c.pendingTurnID != ""

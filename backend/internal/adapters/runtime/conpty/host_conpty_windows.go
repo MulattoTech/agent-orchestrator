@@ -15,8 +15,8 @@ import (
 // conptyConn is the real ptyConn implementation backed by go-pty's ConPty
 // (Windows ConPTY API). Only compiled on Windows.
 type conptyConn struct {
-	pty gopty.ConPty
-	cmd *gopty.Cmd
+	pty     gopty.ConPty
+	process *ownedConPTYProcess
 
 	doneOnce      sync.Once
 	doneC         chan struct{}
@@ -48,20 +48,18 @@ func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (pty
 		return nil, fmt.Errorf("conpty: initial resize: %w", err)
 	}
 
-	cmd := cp.Command(shellCmd, shellArgs...)
-	cmd.Dir = cwd
-	// Inherit parent env so PATH, HOME, etc. are available.
-	cmd.Env = os.Environ()
-
-	if err := cmd.Start(); err != nil {
+	// Process creation atomically assigns a private Job Object before the
+	// child runs. The host stays outside the job so daemon loss preserves it.
+	process, err := startConPTYJob(windows.Handle(cp.Fd()), cwd, shellCmd, shellArgs, os.Environ())
+	if err != nil {
 		_ = cp.Close()
 		return nil, fmt.Errorf("conpty: start command: %w", err)
 	}
 
 	c := &conptyConn{
-		pty:   cp,
-		cmd:   cmd,
-		doneC: make(chan struct{}),
+		pty:     cp,
+		process: process,
+		doneC:   make(chan struct{}),
 	}
 
 	go c.wait()
@@ -69,11 +67,13 @@ func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (pty
 }
 
 func (c *conptyConn) wait() {
-	_ = c.cmd.Wait()
-	code := 0
-	if c.cmd.ProcessState != nil {
-		code = c.cmd.ProcessState.ExitCode()
+	code, err := c.process.wait()
+	if err != nil {
+		code = 1
 	}
+	// Root completion ends its owned tree as well; detached descendants must
+	// not survive a completed terminal workload.
+	_ = c.process.closeJob()
 	c.exitMu.Lock()
 	c.exitCode = code
 	c.exited = true
@@ -90,6 +90,9 @@ func (c *conptyConn) wait() {
 func (c *conptyConn) Read(b []byte) (int, error)  { return c.pty.Read(b) }
 func (c *conptyConn) Write(b []byte) (int, error) { return c.pty.Write(b) }
 func (c *conptyConn) Close() error {
+	// End only this invocation's job before closing the console, whose close
+	// can otherwise wait on children that ignore terminal EOF.
+	jobErr := c.process.closeJob()
 	c.closeConsole()
 	c.disposeOnce.Do(func() {
 		c.disposeErr = errors.Join(
@@ -97,12 +100,7 @@ func (c *conptyConn) Close() error {
 			c.pty.OutputPipe().Close(),
 		)
 	})
-	// Best-effort kill: a child that ignores ConPTY EOF still gets terminated
-	// so Done() fires. Mirrors pty.kill() in pty-host.ts.
-	if c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
-	}
-	return c.disposeErr
+	return errors.Join(jobErr, c.disposeErr)
 }
 
 func (c *conptyConn) closeConsole() {
@@ -124,10 +122,7 @@ func (c *conptyConn) Resize(cols, rows int) error {
 }
 func (c *conptyConn) Done() <-chan struct{} { return c.doneC }
 func (c *conptyConn) PID() int {
-	if c.cmd.Process == nil {
-		return 0
-	}
-	return c.cmd.Process.Pid
+	return c.process.pid
 }
 func (c *conptyConn) ExitCode() (int, bool) {
 	c.exitMu.Lock()

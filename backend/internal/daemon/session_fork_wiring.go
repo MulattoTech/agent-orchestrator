@@ -226,22 +226,35 @@ func claudeWorkspaceForker(drivers ports.ChatDriverRegistry) (sessionmanager.Cla
 
 // reapForkSeeds removes fork file snapshots a crash left behind.
 func reapForkSeeds(ctx context.Context, store *sqlite.Store, log *slog.Logger) {
+	_ = reapForkSeedsWithReaper(ctx, store, log, forkseed.Reap)
+}
+
+type forkSeedReaper func(context.Context, string, time.Duration, time.Time) (int, error)
+
+// reapForkSeedsWithReaper retains startup's project filtering and recovery
+// iteration while making the Git effect explicit. It never replaces a missing
+// reaper with a production command.
+func reapForkSeedsWithReaper(ctx context.Context, store *sqlite.Store, log *slog.Logger, reap forkSeedReaper) error {
+	if reap == nil {
+		return fmt.Errorf("session fork: seed reaper is required")
+	}
 	projects, err := store.ListProjects(ctx)
 	if err != nil {
 		log.Warn("session fork: list projects for seed cleanup", "err", err)
-		return
+		return err
 	}
 	for _, project := range projects {
-		if project.Path == "" || project.Kind.WithDefault() == domain.ProjectKindWorkspace {
+		if project.Path == "" || project.Kind.WithDefault() == domain.ProjectKindWorkspace || project.Kind.WithDefault() == domain.ProjectKindScratch {
 			continue
 		}
 		if _, err := os.Stat(project.Path); err != nil {
 			continue
 		}
-		if removed, err := forkseed.Reap(ctx, project.Path, forkSeedMaxAge, time.Now()); err != nil {
+		if removed, err := reap(ctx, project.Path, forkSeedMaxAge, time.Now()); err != nil {
 			log.Debug("session fork: seed cleanup", "project", project.ID, "err", err)
 		} else if removed > 0 {
 			log.Info("session fork: removed leftover file snapshots", "project", project.ID, "count", removed)
 		}
 	}
+	return nil
 }

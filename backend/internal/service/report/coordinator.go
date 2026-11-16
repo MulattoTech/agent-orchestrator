@@ -191,6 +191,13 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		}
 	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
+		var accepted *domain.ReportDeliveryAcceptedError
+		if errors.As(err, &accepted) && accepted.DeliveryID == batch.IdempotencyKey() && accepted.TurnID != "" {
+			// The exact batch is already attached to its original durable turn.
+			// Preserve the provider error, but never create a second delivery.
+			_, ackErr := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
+			return errors.Join(err, ackErr)
+		}
 		if errors.Is(err, ErrOrchestratorBusy) {
 			// Released, the batch would stay the earliest due and every retry would
 			// stop RunDue before any other project's reports. Back off instead.
@@ -301,7 +308,17 @@ const (
 	chatReportClose = "</ao-worker-reports>"
 )
 
+// ProviderContext is durable AO-owned context, never authored message text.
+// Keep the envelope only in the provider serialization for legacy transcript matching.
+func (b PreparedBatch) ProviderContext() string {
+	if len(b.Reports) == 0 {
+		return ""
+	}
+	return chatReportOpen + "\n" + b.Render() + "\n" + chatReportClose
+}
+
 // AppendToUserMessage places reports after the user's text in one semantic turn.
+// Deprecated: persist ProviderContext as internal content instead.
 // The envelope lets AO's Chat UI hide daemon-authored context while preserving
 // the exact prompt accepted by the provider for retry and recovery.
 func (b PreparedBatch) AppendToUserMessage(message string) string {

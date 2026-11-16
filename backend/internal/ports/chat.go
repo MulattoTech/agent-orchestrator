@@ -304,7 +304,10 @@ var PermissionModesStrictestFirst = []PermissionMode{
 
 // ChatStartConfig is what a driver needs to open a new provider conversation.
 type ChatStartConfig struct {
-	SessionID domain.SessionID
+	// PolicyRole and ProjectID carry trusted dispatch ownership, never prompt text.
+	PolicyRole string
+	ProjectID  domain.ProjectID
+	SessionID  domain.SessionID
 	// DataDir is AO's state root. Provider bindings may write process-scoped
 	// configuration beneath it, but must never use the worktree or an OS-default
 	// application-data directory for AO-owned state.
@@ -363,6 +366,8 @@ type ChatStartConfig struct {
 
 // ChatResumeConfig reattaches to a provider conversation after a restart.
 type ChatResumeConfig struct {
+	PolicyRole string
+	ProjectID  domain.ProjectID
 	// ReconnectOnly forbids launching a replacement provider during a health check.
 	ReconnectOnly bool
 	// See ChatStartConfig.ProviderIDsScoped.
@@ -415,6 +420,10 @@ type ChatMCPServerConfig struct {
 
 // ChatInternalReplayResourceURI is reserved for AO's reconstructed edit context.
 const ChatInternalReplayResourceURI = "ao://conversation/edit-replay"
+
+// ChatWorkerReportURIPrefix binds internal report context to its durable batch.
+// Public request DTOs cannot set Internal, so callers cannot manufacture receipts.
+const ChatWorkerReportURIPrefix = "ao://worker-reports/"
 
 // ChatExcerptResourceURIPrefix identifies legacy AO-verified transcript excerpts.
 // Captured snapshots carry user-supplied context without resolving this URI.
@@ -512,7 +521,11 @@ type ChatUserMessage struct {
 // MessageDeliveryOptions describes facts about the message independent of the
 // mechanism AO uses to deliver it.
 type MessageDeliveryOptions struct {
-	InteractionAt time.Time
+	// ReportDelivery identifies internally generated durable semantic reports.
+	// A dispatcher may acknowledge a typed durable acceptance while preserving
+	// the underlying provider refusal or uncertain-write error for diagnostics.
+	ReportDelivery bool
+	InteractionAt  time.Time
 	// SenderSessionID is cooperative local identity, resolved from stored metadata.
 	SenderSessionID string
 	AuthoredByUser  bool

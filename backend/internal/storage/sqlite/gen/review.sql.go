@@ -951,6 +951,31 @@ func (q *Queries) RecordReviewChatControllerError(ctx context.Context, arg Recor
 	return result.RowsAffected()
 }
 
+const recordReviewPublication = `-- name: RecordReviewPublication :execrows
+UPDATE review_run SET github_review_id = ?1
+WHERE id = ?2
+  AND target_sha = ?3
+  AND status IN ('complete', 'delivered')
+  AND verdict IN ('approved', 'changes_requested')
+  AND (github_review_id = '' OR github_review_id = ?1)
+`
+
+type RecordReviewPublicationParams struct {
+	GithubReviewID string
+	ID             string
+	TargetSha      string
+}
+
+// A late publication receipt may fill an empty field but may not replace an
+// existing receipt, the verdict, the body, or the reviewed commit.
+func (q *Queries) RecordReviewPublication(ctx context.Context, arg RecordReviewPublicationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordReviewPublication, arg.GithubReviewID, arg.ID, arg.TargetSha)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const restoreReviewLaunchState = `-- name: RestoreReviewLaunchState :execrows
 UPDATE review SET pr_url = ?, interface_mode = ?, reviewer_handle_id = ?, agent_session_id = ?,
     reviewer_activity_state = ?, reviewer_launch_id = ?, provider_conversation_id = ?,

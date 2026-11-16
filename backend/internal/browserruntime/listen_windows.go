@@ -4,23 +4,13 @@ package browserruntime
 
 import (
 	"net"
-	"path/filepath"
-	"regexp"
 
 	"github.com/Microsoft/go-winio"
+	"github.com/aoagents/agent-orchestrator/backend/internal/localipc"
 )
 
-var unsafePipeChars = regexp.MustCompile(`[^a-zA-Z0-9\-]`)
-
-func pipeNameFromRunFile(runFilePath string) string {
-	if runFilePath == "" {
-		return `\\.\pipe\ao-browser`
-	}
-	dir := filepath.Base(filepath.Dir(runFilePath))
-	if dir == ".ao" || dir == "." || dir == "" {
-		return `\\.\pipe\ao-browser`
-	}
-	return `\\.\pipe\ao-browser-` + unsafePipeChars.ReplaceAllString(dir, "-")
+func pipeNameFromRunFile(runFilePath string) (string, error) {
+	return localipc.PipeName(runFilePath, "browser-runtime-browser")
 }
 
 // Listen creates the local daemon-to-Electron browser bridge listener.
@@ -28,16 +18,16 @@ func Listen(runFilePath string) (net.Listener, string, error) {
 	return ListenNamed(runFilePath, "browser")
 }
 
-// ListenNamed creates a browser bridge listener for the named runtime. The
-// Electron runtime keeps its historical pipe name.
+// ListenNamed keeps each runtime in a distinct service domain under the complete
+// physical state root. Clients consume the exact published locator.
 func ListenNamed(runFilePath, runtimeName string) (net.Listener, string, error) {
-	name := pipeNameFromRunFile(runFilePath)
-	if runtimeName != "browser" {
-		name += "-" + unsafePipeChars.ReplaceAllString(runtimeName, "-")
+	purpose := "browser-runtime-" + runtimeName
+	name, err := localipc.PipeName(runFilePath, purpose)
+	if err != nil {
+		return nil, "", err
 	}
 	ln, err := winio.ListenPipe(name, &winio.PipeConfig{
-		// Protected DACL: the creating owner and LocalSystem only. This prevents
-		// another local account from connecting to or squatting the runtime pipe.
+		// Protected DACL: the creating owner and LocalSystem only.
 		SecurityDescriptor: "D:P(A;;GA;;;SY)(A;;GA;;;OW)",
 	})
 	if err != nil {

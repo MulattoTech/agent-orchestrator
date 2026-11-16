@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -20,7 +19,7 @@ import (
 // structured account check.
 func (s *Service) authenticationWithAccount(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
 	// Accounts sign in to OpenAI; the adapter checks a custom provider's key instead.
-	if agentID == string(domain.HarnessCodex) && codexagent.UsesCustomModelProvider() {
+	if agentID == string(domain.HarnessCodex) && s.usesCustomCodexModelProvider() {
 		return domain.AgentAuthenticationObservation{}, false
 	}
 	if observation, handled := s.savedDefaultAuthentication(ctx, agentID); handled {
@@ -267,7 +266,7 @@ func (s *Service) SubscribeCodexAccounts(ctx context.Context) (<-chan CodexAccou
 	}
 	source := s.codexAccounts.subscribe(ctx)
 	out := make(chan CodexAccounts, 1)
-	go func() {
+	s.background.Go(func() {
 		defer close(out)
 		for snapshot := range source {
 			if s.codexSwitches != nil {
@@ -288,7 +287,7 @@ func (s *Service) SubscribeCodexAccounts(ctx context.Context) (<-chan CodexAccou
 				}
 			}
 		}
-	}()
+	})
 	return out, nil
 }
 
@@ -424,11 +423,11 @@ func (s *Service) VerifyCodexAccountLogin(ctx context.Context, operationID strin
 		// Credential commit is complete. Provider-backed authentication, capacity,
 		// and usage warming happens independently and cannot roll the login back.
 		accountID := result.Account.ID
-		go func() {
+		s.background.Go(func() {
 			_, _ = s.EnsureCodexAccounts(s.codexAccounts.ctx, []string{accountID}, CodexAccountEnsureOptions{
 				IncludeUsage: true, ForceAuthentication: true, ForceDeviceReconciliation: true,
 			})
-		}()
+		})
 	}
 	return result, err
 }
@@ -461,7 +460,7 @@ func (s *Service) InvalidateCodexAccountAuthentication() {
 		s.codexAccounts.invalidate(id)
 	}
 	s.readiness.Invalidate(string(domain.HarnessCodex), readinessInvalidateAuthentication)
-	go func() { _ = s.codexAccounts.reconcileGlobal(s.codexAccounts.ctx) }()
+	s.background.Go(func() { _ = s.codexAccounts.reconcileGlobal(s.codexAccounts.ctx) })
 }
 
 // ObserveActiveCodexAccountCapacity attributes a provider event to the active account.
@@ -481,7 +480,7 @@ func (s *Service) WarmCodexAccounts() {
 	if s.codexAccounts == nil {
 		return
 	}
-	go func() {
+	s.background.Go(func() {
 		if err := s.codexAccounts.waitAccountStore(s.codexAccounts.ctx); err != nil {
 			return
 		}
@@ -503,7 +502,7 @@ func (s *Service) WarmCodexAccounts() {
 			}
 		}
 		_ = s.codexAccounts.capacity.ensure(s.codexAccounts.ctx, records, capabilities, false)
-	}()
+	})
 }
 
 // WaitCodexAccountStoreReady waits only for AO-owned local account state. It

@@ -182,7 +182,34 @@ type Config struct {
 	// BranchStates refreshes sessions' local commit and push facts on this
 	// tick. Nil skips it.
 	BranchStates BranchStateReconciler
+	// RepositoryDiscovery resolves local origins and remotes. Nil uses native
+	// Git for ordinary callers; private boot wiring requires an explicit value.
+	RepositoryDiscovery RepositoryDiscovery
 }
+
+// RepositoryDiscovery supplies local checkout metadata without prescribing how
+// it is read. Provider calls remain on Provider; this covers local Git effects.
+type RepositoryDiscovery interface {
+	OriginURL(context.Context, string) string
+	RemoteURLs(context.Context, string) []string
+}
+
+type gitRepositoryDiscovery struct{}
+
+func (gitRepositoryDiscovery) OriginURL(ctx context.Context, path string) string {
+	out, err := aoprocess.CommandContext(ctx, "git", "-C", path, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func (gitRepositoryDiscovery) RemoteURLs(ctx context.Context, path string) []string {
+	return gitRemoteURLsFunc(ctx, path)
+}
+
+// NewRepositoryDiscovery constructs the native Git reader without running it.
+func NewRepositoryDiscovery() RepositoryDiscovery { return gitRepositoryDiscovery{} }
 
 // BranchStateReconciler reads every live session's branch facts from git.
 type BranchStateReconciler interface {
@@ -272,6 +299,7 @@ type Observer struct {
 	renames map[string]string
 	// branchStates refreshes local branch facts on each tick.
 	branchStates BranchStateReconciler
+	repositories RepositoryDiscovery
 	// forceMu guards forcedReviews.
 	forceMu sync.Mutex
 	// forcedReviews holds PR URLs whose metadata and review threads the next
@@ -296,6 +324,10 @@ type Observer struct {
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
 	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, lifecycleTimeout: DefaultLifecycleTimeout, forcedReviews: map[string]bool{}, forcedSessions: map[domain.SessionID]bool{}, sessionRefreshDebounce: 500 * time.Millisecond, trigger: make(chan struct{}, 1)}
+	o.repositories = cfg.RepositoryDiscovery
+	if o.repositories == nil {
+		o.repositories = NewRepositoryDiscovery()
+	}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -903,7 +935,7 @@ func (o *Observer) discoverSubjects(ctx context.Context) (map[string]*subject, [
 				continue
 			}
 			if p.RepoOriginURL == "" && p.Path != "" {
-				if url := resolveGitOriginURL(p.Path); url != "" {
+				if url := o.repositories.OriginURL(ctx, p.Path); url != "" {
 					p.RepoOriginURL = url
 					if err := o.store.UpsertProject(ctx, p); err != nil {
 						o.logger.Warn("scm observer: backfill origin URL persist failed", "project", p.ID, "err", err)
@@ -961,7 +993,7 @@ func (o *Observer) resolveScanRepos(ctx context.Context, proj domain.ProjectReco
 		return repos
 	}
 	seen := map[string]bool{strings.ToLower(prKey(origin, 0)): true}
-	for _, url := range gitRemoteURLsFunc(ctx, proj.Path) {
+	for _, url := range o.repositories.RemoteURLs(ctx, proj.Path) {
 		repo, ok := o.provider.ParseRepository(url)
 		if !ok {
 			continue
@@ -2371,18 +2403,6 @@ func normalizePRState(draft, merged, closed bool) string {
 	default:
 		return string(domain.PRStateOpen)
 	}
-}
-
-// resolveGitOriginURL runs `git -C path remote get-url origin` and returns the
-// trimmed URL, or "" if the command fails (missing repo, no origin remote, etc).
-// The observer uses this to backfill projects that were registered before
-// project.Add resolved origin URLs at add time.
-func resolveGitOriginURL(path string) string {
-	out, err := aoprocess.Command("git", "-C", path, "remote", "get-url", "origin").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 func gitRemoteURLs(ctx context.Context, path string) []string {

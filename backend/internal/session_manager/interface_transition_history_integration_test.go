@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -46,10 +47,17 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("test executable"), 0700); err != nil {
+					binaryName := "claude"
+					if runtime.GOOS == "windows" {
+						binaryName += ".exe"
+					}
+					fixtureBinary := filepath.Join(binDir, binaryName)
+					if err := os.WriteFile(fixtureBinary, []byte("non-executable test marker"), 0700); err != nil {
 						t.Fatal(err)
 					}
-					t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+					// The runtime never executes this marker. Keep discovery isolated
+					// and replace native authentication explicitly below.
+					t.Setenv("PATH", binDir)
 					t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 					st := sqlitetest.MustOpenAt(t, dir)
 					project := domain.ProjectRecord{ID: "history", Path: workspace, RegisteredAt: time.Now(), Config: testRoleAgents()}
@@ -60,7 +68,17 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 					}
 					original := "bb786e64-3b86-44cb-8d34-eafae933d8e4"
 					freshID := claudeagent.SessionUUID
-					var agent ports.Agent = claudeagent.New()
+					claudeFixture := &nativeOwnershipClaudeFixtureAgent{
+						Plugin: claudeagent.New(), binary: fixtureBinary, configDir: configDir,
+					}
+					var agent ports.Agent = claudeFixture
+					if harness == domain.HarnessClaudeCode {
+						t.Cleanup(func() {
+							if !t.Failed() && claudeFixture.authChecks == 0 {
+								t.Error("fixture did not exercise its explicit authentication dependency")
+							}
+						})
+					}
 					if harness != domain.HarnessClaudeCode {
 						original = "opaque-native-original"
 						freshID = func(id string) string { return "opaque-native-" + id }
@@ -344,4 +362,55 @@ func (c *nativeOwnershipHistory) ReadHistory(context.Context) ([]ports.ChatEvent
 		}
 	}
 	return events, nil
+}
+
+// Keep the production Claude command/history algorithms while replacing every
+// authentication capability with a local deterministic observation. In
+// particular, no real CLI auth-status command or credential probe is permitted
+// by this fixture, regardless of what is installed on the test host.
+type nativeOwnershipClaudeFixtureAgent struct {
+	*claudeagent.Plugin
+	binary     string
+	configDir  string
+	authChecks int
+}
+
+func (a *nativeOwnershipClaudeFixtureAgent) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	a.authChecks++
+	return ports.AgentAuthStatusAuthorized, nil
+}
+
+func (a *nativeOwnershipClaudeFixtureAgent) ValidateLaunchAuth(ctx context.Context, _ string, env map[string]string) (ports.AgentAuthStatus, error) {
+	if env["CLAUDE_CONFIG_DIR"] != a.configDir {
+		return ports.AgentAuthStatusUnknown, errors.New("history fixture refuses non-fixture configuration")
+	}
+	return a.AuthStatus(ctx)
+}
+
+func (a *nativeOwnershipClaudeFixtureAgent) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	status, err := a.AuthStatus(ctx)
+	return status, domain.AgentAccountIdentity{}, nil, err
+}
+
+func (a *nativeOwnershipClaudeFixtureAgent) AuthStatusForRuntime(ctx context.Context, _ string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	return a.AuthStatusWithDiagnostics(ctx)
+}
+
+func (a *nativeOwnershipClaudeFixtureAgent) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
+	command, err := a.Plugin.GetLaunchCommand(ctx, cfg)
+	if err == nil && (len(command) == 0 || command[0] != a.binary) {
+		return nil, errors.New("history fixture refuses a non-fixture binary")
+	}
+	return command, err
+}
+
+func (a *nativeOwnershipClaudeFixtureAgent) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
+	command, ok, err := a.Plugin.GetRestoreCommand(ctx, cfg)
+	if err == nil && ok && (len(command) == 0 || command[0] != a.binary) {
+		return nil, false, errors.New("history fixture refuses a non-fixture restore binary")
+	}
+	return command, ok, err
 }

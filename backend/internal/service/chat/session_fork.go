@@ -63,6 +63,7 @@ func (s *Service) SessionForkSource(ctx context.Context, rec domain.SessionRecor
 	}
 	anyTurn := forksOlderTurns(rec.Harness)
 	plan := sessionForkPlan{
+		projectID: rec.ProjectID, policyRole: inferenceRole(StartConfig{Kind: rec.Kind}),
 		driver: driver, sourceProviderID: providerID, sourceWorkspace: rec.Metadata.WorkspacePath,
 		model: rec.Metadata.Model, effort: rec.Metadata.Effort, permissions: rec.Metadata.Permissions,
 	}
@@ -253,6 +254,8 @@ func codexNativeTurnID(id string) string {
 }
 
 type sessionForkPlan struct {
+	projectID        domain.ProjectID
+	policyRole       string
 	driver           ports.ChatDriver
 	sourceProviderID string
 	sourceWorkspace  string
@@ -274,6 +277,7 @@ type sessionForkPlan struct {
 // worktree and returns its id. The fork's controller then starts from it.
 func (p sessionForkPlan) prepare(ctx context.Context, target ports.ForkTarget) (string, error) {
 	cfg := ports.ChatStartConfig{
+		PolicyRole: p.policyRole, ProjectID: p.projectID,
 		// A separate host id, so the temporary fork host never collides with
 		// the fork's own controller.
 		SessionID: domain.SessionID("fork-" + string(target.SessionID)),

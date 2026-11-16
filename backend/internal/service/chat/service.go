@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 )
@@ -60,6 +61,7 @@ type Service struct {
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader
 	sessions               SessionReader
+	fileSnapshotCapture    filesnapshot.CaptureFunc
 	drivers                ports.ChatDriverRegistry
 	activity               ActivityRecorder
 	log                    *slog.Logger
@@ -173,6 +175,9 @@ type Options struct {
 	PageReader SnapshotPageReader
 	Sessions   SessionReader
 	Drivers    ports.ChatDriverRegistry
+	// FileSnapshotCapture supplies the Git snapshot effect. Nil selects the
+	// production implementation; isolated boot must supply it explicitly.
+	FileSnapshotCapture filesnapshot.CaptureFunc
 	// Activity feeds derived session status from turn events. Nil leaves a chat
 	// session reading as idle while it works, so production always wires it.
 	Activity ActivityRecorder
@@ -226,11 +231,16 @@ func New(opts Options) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	capture := opts.FileSnapshotCapture
+	if capture == nil {
+		capture = filesnapshot.Capture
+	}
 	svc := &Service{
 		store:                  opts.Store,
 		reader:                 opts.Reader,
 		pageReader:             opts.PageReader,
 		sessions:               opts.Sessions,
+		fileSnapshotCapture:    capture,
 		drivers:                opts.Drivers,
 		activity:               opts.Activity,
 		log:                    log,
@@ -866,6 +876,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		unanswered := s.branchUnanswered(ctx, cfg.SessionID, conversation.ID, activeBranch)
 		freshIfMissing = freshIfMissing || unanswered
 		conv, err = resume(ctx, ports.ChatResumeConfig{
+			PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
 			FreshIfMissing:         freshIfMissing,
@@ -886,6 +897,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		})
 	} else {
 		conv, err = driver.Start(ctx, ports.ChatStartConfig{
+			PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 			ProviderIDsScoped:     providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
 			SessionID:             hostID,
 			DataDir:               cfg.DataDir,
@@ -1082,7 +1094,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, cfg.WorkspacePath, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, cfg.WorkspacePath, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader, s.sessionFileSnapshotCapture(cfg.SessionID))
 	if owner.Kind != domain.ConversationOwnerReview {
 		controller.artifactDir = s.sessionArtifactDir(ctx, cfg.SessionID)
 	}
@@ -1438,7 +1450,15 @@ func (s *Service) Send(
 		if err != nil {
 			return domain.ConversationTurn{}, fmt.Errorf("prepare worker reports: %w", err)
 		}
-		msg.Text = reports.AppendToUserMessage(msg.Text)
+		if len(reports.Reports) > 0 {
+			// Keep authored text separate from AO's durable delivery context.
+			// The controller renders internal text only at the provider boundary.
+			msg.Content = append(msg.Content, ports.ChatContent{
+				Type: "text", Internal: true,
+				URI:  ports.ChatWorkerReportURIPrefix + reports.IdempotencyKey(),
+				Text: reports.ProviderContext(),
+			})
+		}
 	}
 	var turn domain.ConversationTurn
 	if record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil || behindAccountMove {
@@ -1479,7 +1499,11 @@ func (s *Service) Send(
 			release()
 		}
 	}
-	if err != nil {
+	// Provider refusal and semantic acceptance are independent facts. Keep an
+	// exact report already frozen in this turn bound to that turn, even when no
+	// inference occurred or a write's outcome requires operator reconciliation.
+	// Releasing it would duplicate the same report on a later user message.
+	if err != nil && !s.acceptedPiggyback(ctx, turn, msg, reports, err) {
 		if s.reports != nil {
 			_ = s.reports.ReleasePiggyback(ctx, reports, err)
 		}
@@ -1491,11 +1515,11 @@ func (s *Service) Send(
 			_ = s.reports.ReleasePiggyback(ctx, reports, errors.New("duplicate chat message"))
 			return turn, nil
 		}
-		if err := s.reports.AcceptPiggyback(ctx, reports); err != nil {
-			return domain.ConversationTurn{}, fmt.Errorf("acknowledge worker reports: %w", err)
+		if ackErr := s.reports.AcceptPiggyback(ctx, reports); ackErr != nil {
+			return turn, errors.Join(err, fmt.Errorf("acknowledge worker reports: %w", ackErr))
 		}
 	}
-	return turn, nil
+	return turn, err
 }
 
 // SendForOwner sends a user message to an owner-specific chat controller.
@@ -1865,7 +1889,8 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 	select {
 	case <-controller.stopped:
 		if hibernating {
-			// Explicit Kill consumes the queue that idle shutdown preserved.
+			// Explicit Kill settles ambiguous work that idle shutdown preserved.
+			// Proven undispatched messages remain durable until user cancellation.
 			err = errors.Join(err, controller.cleanupOwnedControllerWork(ctx, s.now()))
 		}
 		s.mu.Lock()
@@ -3024,8 +3049,15 @@ func (s *Service) relayChatTurn(
 		}
 		turn, err := controller.Send(ctx, msg)
 		release()
+		if err != nil && options.ReportDelivery && validReportDeliveryID(clientMessageID) {
+			if stored, message, ok := s.acceptedReportMessage(ctx, turn, msg, err); ok &&
+				message.Origin == domain.MessageOriginAutomation && message.Text == text &&
+				(stored.State == domain.TurnStateQueued || stored.ProviderInputText == text) {
+				return turn.ID, &domain.ReportDeliveryAcceptedError{DeliveryID: clientMessageID, TurnID: turn.ID, Cause: err}
+			}
+		}
 		if err != nil {
-			return "", err
+			return turn.ID, err
 		}
 		return turn.ID, nil
 	}

@@ -40,6 +40,9 @@ func (m *Manager) SetClaudeSessionForker(fork ClaudeSessionForker, cleanup Claud
 // the fork's launch command: the agent's own fork command, with the same
 // flags and permissions a restore uses, run in the fork's worktree.
 func (m *Manager) TerminalForkSource(ctx context.Context, rec domain.SessionRecord, turnID string) (sessionfork.Source, error) {
+	if err := checkSessionLaunchPolicy(rec.Harness, domain.SessionModeTUI); err != nil {
+		return sessionfork.Source{}, err
+	}
 	if turnID != "" {
 		// A terminal has no AO turns to cut at; its fork copies everything.
 		return sessionfork.Source{Refusal: sessionfork.CodeOlderTurn}, nil
@@ -68,6 +71,9 @@ func (m *Manager) TerminalForkSource(ctx context.Context, rec domain.SessionReco
 		frozen, lastTurn = true, m.latestTerminalTurn(ctx, source.ID)
 	}
 	prepare := func(ctx context.Context, target ports.ForkTarget) (ports.ForkTerminalLaunch, error) {
+		if err := checkSessionLaunchPolicy(source.Harness, domain.SessionModeTUI); err != nil {
+			return ports.ForkTerminalLaunch{}, err
+		}
 		if frozen {
 			if err := m.requireNoTurnSince(ctx, source.ID, lastTurn); err != nil {
 				return ports.ForkTerminalLaunch{}, err

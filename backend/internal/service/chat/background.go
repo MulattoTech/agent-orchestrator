@@ -29,6 +29,7 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 	cfg.ProviderScopeID = s.newID()
 	cfg.ProviderIDsScoped = true
 	cfg.Ephemeral = true
+	cfg.PolicyRole = "lightweight"
 	cfg.Effort = ""
 	cfg.ReadOnly = true
 	cfg.DisableNetwork = true

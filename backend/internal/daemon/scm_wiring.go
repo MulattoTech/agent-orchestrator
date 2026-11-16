@@ -44,9 +44,27 @@ func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.M
 		return closedDone()
 	}
 	provider := scmmulti.New(named...)
-	observer := scmobserve.New(provider, store, lcm, scmobserve.Config{Logger: logger, ScopedIdentityResolver: provider, BranchStates: branchStates})
+	done, err := startSCMObserverWithProvider(ctx, store, lcm, branchStates, provider, productionSCMRepositoryDiscovery(), reviewRefresher, logger)
+	if err != nil {
+		logger.Error("scm observer disabled: invalid dependencies", "err", err)
+		return closedDone()
+	}
+	return done
+}
+
+// startSCMObserverWithProvider runs the ordinary observer against explicitly
+// supplied provider and repository effects. Missing fixture dependencies fail
+// before a polling goroutine or credential lookup can start.
+func startSCMObserverWithProvider(ctx context.Context, store *sqlite.Store, lcm *lifecycle.Manager, branchStates scmobserve.BranchStateReconciler, provider *scmmulti.Provider, repositories scmobserve.RepositoryDiscovery, reviewRefresher *scmReviewRefresher, logger *slog.Logger) (<-chan struct{}, error) {
+	if provider == nil {
+		return nil, errors.New("scm observer: provider is required")
+	}
+	if repositories == nil {
+		return nil, errors.New("scm observer: repository discovery is required")
+	}
+	observer := scmobserve.New(provider, store, lcm, scmobserve.Config{Logger: logger, ScopedIdentityResolver: provider, BranchStates: branchStates, RepositoryDiscovery: repositories})
 	reviewRefresher.Bind(observer)
-	return observer.Start(ctx)
+	return observer.Start(ctx), nil
 }
 
 func newGitHubSCMProvider(logger *slog.Logger) (*scmgithub.Provider, error) {

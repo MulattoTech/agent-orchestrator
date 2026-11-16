@@ -4,20 +4,16 @@ package browserstream
 
 import (
 	"net"
-	"path/filepath"
-	"regexp"
 
 	"github.com/Microsoft/go-winio"
+	"github.com/aoagents/agent-orchestrator/backend/internal/localipc"
 )
 
-var unsafePipeChars = regexp.MustCompile(`[^a-zA-Z0-9\-]`)
-
 func Listen(runFilePath string) (net.Listener, string, error) {
-	suffix := unsafePipeChars.ReplaceAllString(filepath.Base(filepath.Dir(runFilePath)), "-")
-	if suffix == "" || suffix == ".ao" || suffix == "." {
-		suffix = "default"
+	name, err := localipc.PipeName(runFilePath, "browser-stream")
+	if err != nil {
+		return nil, "", err
 	}
-	name := `\\.\pipe\ao-browser-stream-` + suffix
 	ln, err := winio.ListenPipe(name, &winio.PipeConfig{SecurityDescriptor: "D:P(A;;GA;;;SY)(A;;GA;;;OW)"})
 	if err != nil {
 		return nil, "", err

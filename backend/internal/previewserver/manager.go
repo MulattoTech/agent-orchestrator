@@ -156,9 +156,10 @@ type Manager struct {
 	mu   sync.Mutex
 	runs map[domain.SessionID]*serverRun
 
-	operationsMu sync.Mutex
-	operations   map[domain.SessionID]*sessionOperation
-	registryPath string
+	operationsMu   sync.Mutex
+	operations     map[domain.SessionID]*sessionOperation
+	registryPath   string
+	processEffects ProcessEffects
 
 	onExitMu sync.Mutex
 	onExit   OnExitFunc
@@ -166,6 +167,20 @@ type Manager struct {
 
 // New creates a managed preview-server supervisor.
 func New(log *slog.Logger, dataDir ...string) *Manager {
+	return newWithProcessEffects(log, productionProcessEffects(), dataDir...)
+}
+
+// NewWithProcessEffects uses explicit process boundaries, including startup
+// orphan reconciliation. Missing boundaries are errors; none falls back to a
+// native executable, PID lookup, or process-tree termination.
+func NewWithProcessEffects(log *slog.Logger, dataDir string, effects ProcessEffects) (*Manager, error) {
+	if err := effects.validate(); err != nil {
+		return nil, err
+	}
+	return newWithProcessEffects(log, effects, dataDir), nil
+}
+
+func newWithProcessEffects(log *slog.Logger, effects ProcessEffects, dataDir ...string) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -175,9 +190,10 @@ func New(log *slog.Logger, dataDir ...string) *Manager {
 	}
 	transport.Proxy = nil
 	manager := &Manager{
-		log:        log,
-		runs:       make(map[domain.SessionID]*serverRun),
-		operations: make(map[domain.SessionID]*sessionOperation),
+		log:            log,
+		processEffects: effects,
+		runs:           make(map[domain.SessionID]*serverRun),
+		operations:     make(map[domain.SessionID]*sessionOperation),
 	}
 	if len(dataDir) > 0 && strings.TrimSpace(dataDir[0]) != "" {
 		manager.registryPath = filepath.Join(dataDir[0], processRegistryFile)
@@ -277,7 +293,13 @@ func (m *Manager) Start(
 		args[i] = interpolatePort(arg, port)
 	}
 
-	cmd := previewCommand(executable, args...)
+	cmd, err := m.processEffects.Command(executable, args...)
+	if err != nil || cmd == nil {
+		if err == nil {
+			err = errors.New("preview command factory returned nil")
+		}
+		return stoppedStatus(sessionID), serviceError("PREVIEW_START_FAILED", agentlaunch.RedactValues(fmt.Sprintf("create preview command: %v", err), projectEnv))
+	}
 	cmd.Dir = workingDir
 	cmd.Env = previewEnvironment(os.Environ(), projectEnv, cfg.Env, sessionID, port)
 	logs := newLineBuffer(maxBufferedLogLines)
@@ -313,7 +335,7 @@ func (m *Manager) Start(
 		run.status.Error = agentlaunch.RedactValues(fmt.Sprintf("start preview server: %v", err), projectEnv)
 		return m.statusFor(run), serviceError("PREVIEW_START_FAILED", run.status.Error)
 	}
-	run.startTime = previewProcessStartTime(cmd.Process.Pid)
+	run.startTime = m.processEffects.StartTime(cmd.Process.Pid)
 	if run.startTime == "" {
 		m.log.Warn("could not capture preview process start time; teardown will only signal the direct child",
 			"session", sessionID, "pid", cmd.Process.Pid)
@@ -415,7 +437,7 @@ func (m *Manager) stop(ctx context.Context, sessionID domain.SessionID) (Status,
 	done := run.done
 	m.mu.Unlock()
 
-	if err := terminatePreviewProcess(cmd, startTime); err != nil {
+	if err := m.processEffects.Terminate(cmd, startTime); err != nil {
 		m.log.Warn("stop preview process tree", "session", sessionID, "err", err)
 	}
 	select {
@@ -428,7 +450,7 @@ func (m *Manager) stop(ctx context.Context, sessionID domain.SessionID) (Status,
 		go m.forceStopAfterGrace(sessionID, run, cmd, startTime, done)
 		return m.Status(sessionID), ctx.Err()
 	case <-time.After(5 * time.Second):
-		_ = forceKillPreviewProcess(cmd, startTime)
+		_ = m.processEffects.ForceKill(cmd, startTime)
 		select {
 		case <-done:
 		case <-ctx.Done():
@@ -586,12 +608,12 @@ func (m *Manager) failAndStop(
 	startTime := run.startTime
 	m.mu.Unlock()
 	if cmd != nil {
-		_ = terminatePreviewProcess(cmd, startTime)
+		_ = m.processEffects.Terminate(cmd, startTime)
 		select {
 		case <-run.done:
 			// Reaped: the PID is no longer provably AO's, nothing to escalate.
 		case <-time.After(3 * time.Second):
-			_ = forceKillPreviewProcess(cmd, startTime)
+			_ = m.processEffects.ForceKill(cmd, startTime)
 		}
 	}
 	return m.statusFor(run), serviceError(code, agentlaunch.RedactValues(message, run.projectEnv))
@@ -874,7 +896,7 @@ func (m *Manager) forceStopAfterGrace(
 	case <-done:
 		// Reaped: the PID is no longer provably AO's, nothing to escalate.
 	case <-time.After(5 * time.Second):
-		_ = forceKillPreviewProcess(cmd, startTime)
+		_ = m.processEffects.ForceKill(cmd, startTime)
 		select {
 		case <-done:
 		case <-time.After(time.Second):
@@ -915,7 +937,7 @@ func (m *Manager) reapPersistedProcesses() {
 				"session", process.SessionID, "pid", process.PID)
 			continue
 		}
-		if err := forceKillPreviewPID(process.PID, process.StartTime); err != nil {
+		if err := m.processEffects.ForceKillPID(process.PID, process.StartTime); err != nil {
 			m.log.Warn("reap orphaned preview process", "session", process.SessionID, "pid", process.PID, "err", err)
 		}
 	}

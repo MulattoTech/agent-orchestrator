@@ -18,8 +18,14 @@ var ErrActivityProjectionContention = errors.New("activity projection contention
 // SpawnConfig is the request to start a new session: which project/issue, which
 // agent harness, and the branch/prompt the agent launches with.
 type SpawnConfig struct {
-	ProjectID domain.ProjectID
-	IssueID   domain.IssueID
+	// AdmissionDependencies are durable admission request IDs that must finish
+	// before this command may launch. Unknown or cyclic dependencies are refused.
+	AdmissionDependencies []string
+	// PRCompletionDependencies require exact provider-observed merged PR heads.
+	// They are independent of provisioning dependencies and requirements acceptance.
+	PRCompletionDependencies []domain.PRCompletionDependency
+	ProjectID                domain.ProjectID
+	IssueID                  domain.IssueID
 	// AutomationRunID makes one scheduled occurrence idempotent across daemon
 	// restarts. Ordinary interactive spawns leave this unset.
 	AutomationRunID *domain.AutomationRunID

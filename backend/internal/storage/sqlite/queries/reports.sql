@@ -113,8 +113,55 @@ SET delivery_state = 'pending', available_at = sqlc.arg(available_at),
 WHERE id = sqlc.arg(id) AND delivery_state = 'claimed' AND claim_token = sqlc.arg(claim_token)
 RETURNING *;
 
+-- A crash can happen after a durable message append but before report ACK.
+-- Recover that acceptance from its exact batch identity, within the same project,
+-- instead of attaching a human piggyback to a second message after restart.
+-- Undispatched withdrawn/rolled-back context is not an accepted delivery.
+-- name: RecoverAcceptedReportClaims :execrows
+UPDATE reports
+SET delivery_state = 'acknowledged', acknowledged_at = sqlc.arg(acknowledged_at),
+    last_error = 'durable message acceptance recovered after daemon restart'
+WHERE reports.delivery_state = 'claimed' AND reports.delivery_batch_id <> ''
+  AND EXISTS (
+      SELECT 1
+      FROM conversation_messages AS message
+      JOIN conversation_turns AS turn ON turn.id = message.turn_id
+      JOIN conversations AS conversation ON conversation.id = message.conversation_id
+      WHERE conversation.project_id = reports.project_id
+        AND turn.conversation_id = message.conversation_id
+        AND message.role = 'user'
+        AND turn.state <> 'cancelled'
+        AND (turn.state <> 'interrupted' OR turn.provider_turn_id <> ''
+             OR turn.provider_input_text <> '' OR turn.promotion_started_at IS NOT NULL)
+        AND turn.rolled_back_at IS NULL
+        AND (
+            (message.origin = 'automation' AND message.client_message_id = reports.delivery_batch_id)
+            OR (message.origin = 'human' AND EXISTS (
+                SELECT 1
+                FROM json_each(CASE WHEN json_valid(message.delivery_content_json)
+                    THEN message.delivery_content_json ELSE '[]' END) AS block
+                WHERE json_extract(CASE WHEN block.type = 'object' THEN block.value ELSE '{}' END, '$.type') = 'text'
+                  AND json_extract(CASE WHEN block.type = 'object' THEN block.value ELSE '{}' END, '$.internal') = 1
+                  AND json_extract(CASE WHEN block.type = 'object' THEN block.value ELSE '{}' END, '$.uri') = 'ao://worker-reports/' || reports.delivery_batch_id
+                  AND COALESCE(json_extract(CASE WHEN block.type = 'object' THEN block.value ELSE '{}' END, '$.text'), '') <> ''
+            ))
+        )
+  );
+
 -- name: RequeueClaimedReports :execrows
 UPDATE reports
 SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
     last_error = 'delivery claim recovered after daemon restart'
 WHERE delivery_state = 'claimed';
+
+-- A human can withdraw an undispatched queue item after its report batch was
+-- acknowledged as durably accepted. Restore that batch atomically with cancel.
+-- The conversation's project fences a forged/corrupt cross-project reference.
+-- name: RequeueUndispatchedReportBatch :exec
+UPDATE reports
+SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
+    acknowledged_at = NULL, available_at = min(available_at, sqlc.arg(available_at)),
+    last_error = 'accepted report context withdrawn before provider dispatch'
+WHERE delivery_state = 'acknowledged'
+  AND delivery_batch_id = sqlc.arg(delivery_batch_id)
+  AND reports.project_id = (SELECT conversations.project_id FROM conversations WHERE conversations.id = sqlc.arg(conversation_id));

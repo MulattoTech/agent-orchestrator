@@ -51,6 +51,7 @@ type ptyConn interface {
 
 // ServeConfig carries everything the host needs.
 type ServeConfig struct {
+	Identity  HostIdentity
 	SessionID string
 	Listener  net.Listener // caller provides (loopback); engine owns Accept loop
 	PTY       ptyConn
@@ -309,7 +310,7 @@ func (h *host) pumpPTY() {
 
 	code, _ := h.cfg.PTY.ExitCode()
 	pid := h.cfg.PTY.PID()
-	h.broadcast(statusFrame(false, pid, &code))
+	h.broadcast(statusFrame(false, pid, &code, h.cfg.Identity))
 	// Keep-alive: do NOT shutdown here. The host stays up so clients can
 	// still connect and read scrollback.
 }
@@ -534,6 +535,10 @@ func (h *host) removeClient(conn net.Conn, client *clientState) {
 
 // handleConn manages the lifecycle of a single client connection.
 func (h *host) handleConn(conn net.Conn) {
+	if !h.authorizeClient(conn) {
+		_ = conn.Close()
+		return
+	}
 	client := newClientState()
 	go h.writeClient(conn, client)
 
@@ -659,7 +664,7 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 		if exited {
 			codePtr = &code
 		}
-		h.sendTo(conn, statusFrame(alive, pid, codePtr))
+		h.sendTo(conn, statusFrame(alive, pid, codePtr, h.cfg.Identity))
 
 	case MsgWatchForegroundReq:
 		// The watcher gets the current state at once, then each change.
@@ -693,10 +698,13 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 }
 
 // statusFrame builds a MsgStatusRes frame.
-func statusFrame(alive bool, pid int, exitCode *int) []byte {
+func statusFrame(alive bool, pid int, exitCode *int, identities ...HostIdentity) []byte {
 	sp := StatusPayload{
 		Alive: alive, PID: pid, ExitCode: exitCode,
 		ProtocolVersion: conPTYHostProtocolVersion,
+	}
+	if len(identities) > 0 {
+		sp.HostIdentity = identities[0]
 	}
 	b, _ := json.Marshal(sp)
 	frame, _ := EncodeMessage(MsgStatusRes, b) // b is small JSON, never overflows uint32

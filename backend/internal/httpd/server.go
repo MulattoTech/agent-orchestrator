@@ -33,6 +33,8 @@ type Server struct {
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
 	stopAgents        atomic.Bool
+	// Set before Run, after the supervisor listener actually binds.
+	supervisorAddress string
 }
 
 // NewWithDeps constructs a Server with API dependencies supplied by the daemon
@@ -48,6 +50,15 @@ type Server struct {
 // ("daemon listening") and written to running.json, both of which the supervisor
 // reads, so the fallback propagates to the renderer with no UI changes.
 func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager, deps APIDeps) (*Server, error) {
+	return NewWithDepsAndMiddleware(cfg, log, termMgr, deps, func(handler http.Handler) http.Handler { return handler })
+}
+
+// NewWithDepsAndMiddleware uses the same server/router lifecycle with an
+// explicit pre-serving handler boundary. A missing wrapper fails before bind.
+func NewWithDepsAndMiddleware(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager, deps APIDeps, middleware func(http.Handler) http.Handler) (*Server, error) {
+	if middleware == nil {
+		return nil, errors.New("HTTP handler middleware is required")
+	}
 	log = loggerOrDefault(log)
 	ln, err := net.Listen("tcp", cfg.Addr())
 	if err != nil {
@@ -80,6 +91,11 @@ func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager,
 		// ReadHeaderTimeout guards against slow-loris even on loopback;
 		// per-request body/handler timeouts are applied per-surface.
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+	srv.http.Handler = middleware(srv.http.Handler)
+	if srv.http.Handler == nil {
+		srv.Close()
+		return nil, errors.New("HTTP handler middleware returned nil")
 	}
 	return srv, nil
 }
@@ -126,6 +142,10 @@ func (s *Server) IPv6LoopbackAddr() net.Addr {
 // keeping the loopback and LAN surfaces identical.
 func (s *Server) Handler() http.Handler { return s.http.Handler }
 
+// SetSupervisorAddress publishes only a successfully bound daemon-owned
+// listener. It must be called before Run; no inherited environment supplies it.
+func (s *Server) SetSupervisorAddress(address string) { s.supervisorAddress = address }
+
 // Run serves until ctx is cancelled (SIGINT/SIGTERM via signal.NotifyContext),
 // then performs a graceful shutdown bounded by cfg.ShutdownTimeout. It writes
 // running.json before serving and removes it on the way out. Run blocks until
@@ -151,6 +171,7 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 		AppRunID:              s.cfg.AppRunID,
 		BrowserRuntimeAddress: os.Getenv("AO_BROWSER_RUNTIME_ADDRESS"),
 		BrowserStreamAddress:  os.Getenv("AO_BROWSER_STREAM_ADDRESS"),
+		SupervisorAddress:     s.supervisorAddress,
 	}
 	if err := runfile.Write(s.cfg.RunFilePath, info); err != nil {
 		_ = s.listen.Close()

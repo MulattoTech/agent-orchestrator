@@ -418,6 +418,7 @@ type conversationSettingsStore interface {
 // Manager coordinates internal session spawn, restore, kill, and cleanup over
 // the outbound ports. User-facing read-model assembly lives in the service package.
 type Manager struct {
+	admission sessionAdmission
 	runtime   runtimeController
 	agents    ports.AgentResolver
 	workspace ports.Workspace
@@ -903,11 +904,12 @@ const (
 
 // Deps are the collaborators a Session Manager needs; New wires them together.
 type Deps struct {
-	Runtime   runtimeController
-	Agents    ports.AgentResolver
-	Workspace ports.Workspace
-	Store     Store
-	Messenger ports.AgentMessenger
+	SessionAdmission domain.SessionAdmissionLimits
+	Runtime          runtimeController
+	Agents           ports.AgentResolver
+	Workspace        ports.Workspace
+	Store            Store
+	Messenger        ports.AgentMessenger
 	// Defaults supplies the daemon-owned default session interface for spawns that
 	// name no mode. Nil means always use the compatibility default.
 	Defaults SessionModeDefaults
@@ -981,6 +983,7 @@ func (m *Manager) WaitAgentSwitchWorkers(ctx context.Context) error {
 // time.Now when Deps.Clock is nil.
 func New(d Deps) *Manager {
 	m := &Manager{
+		admission:                      sessionAdmission{limits: cloneAdmissionLimits(d.SessionAdmission), resourceCeiling: -1, reservations: make(map[*admissionReservation]struct{}), owner: uuid.NewString()},
 		runtime:                        d.Runtime,
 		agents:                         d.Agents,
 		workspace:                      d.Workspace,
@@ -1095,6 +1098,25 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 	}
+	if err := domain.ValidatePRCompletionDependencies(cfg.PRCompletionDependencies); err != nil {
+		return domain.SessionRecord{}, 0, 0, err
+	}
+	if len(cfg.PRCompletionDependencies) > 0 {
+		if ctx.Value(admissionQueueContextKey{}) == nil {
+			return domain.SessionRecord{}, 0, 0, m.queueSpawnAdmission(ctx, cfg, ErrPRCompletionPending)
+		}
+		if err := m.prCompletionDependenciesReady(ctx, cfg.PRCompletionDependencies); err != nil {
+			return domain.SessionRecord{}, 0, 0, err
+		}
+	}
+	if len(cfg.AdmissionDependencies) > 0 && ctx.Value(admissionQueueContextKey{}) == nil {
+		return domain.SessionRecord{}, 0, 0, m.queueSpawnAdmission(ctx, cfg, ErrAdmissionDependencyPending)
+	}
+	ctx, bindAdmission, releaseAdmission, err := m.reserveSessionAdmission(ctx, cfg.ProjectID, cfg.Kind, "")
+	if err != nil {
+		return domain.SessionRecord{}, 0, 0, m.queueSpawnAdmission(ctx, cfg, err)
+	}
+	defer releaseAdmission()
 	ctx, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
 	defer cancelBudget()
 	budget = ctx
@@ -1179,6 +1201,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
 	mode := m.resolveSessionMode(ctx, cfg.Kind, cfg.RequestedMode)
+	if err := checkSessionLaunchPolicy(cfg.Harness, mode); err != nil {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+	}
 	if mode == domain.SessionModeChat && m.chat != nil && cfg.AgentConfig.Permissions == "" &&
 		effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config).Permissions == "" {
 		// Auto is AO's generic default, not a provider capability. An agent
@@ -1227,6 +1252,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.AgentConfig = resolved
 			cfg.AgentConfigResolved = true
 		}
+	}
+	// Recheck the resolved surface after any default Chat fallback.
+	if err := checkSessionLaunchPolicy(cfg.Harness, mode); err != nil {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 	}
 	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "") {
 		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
@@ -1304,6 +1333,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 	}
 	id := rec.ID
+	bindAdmission(id)
 	if m.agentAccounts != nil || cfg.AgentAccountID != "" {
 		err := ports.ErrAgentAccountUnknown
 		if m.agentAccounts != nil {
@@ -1542,6 +1572,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		prompt = appendAttachmentReferences(prompt, refs)
 	}
 
+	if err := m.reserveWorkspaceOwner(ctx, id, ws.Path); err != nil {
+		// Ownership is uncertain: do not run rollback against another writer's tree.
+		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
+		return domain.SessionRecord{}, 0, 0, err
+	}
 	// Everything above is shared: project, harness, prompts, seed row, worktree,
 	// provisioning, attachments. From here the two modes launch different
 	// controllers, and exactly one of them runs.
@@ -3303,6 +3338,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotFound)
 	}
+	if err := checkSessionLaunchPolicy(rec.Harness, rec.Mode); err != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+	}
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
@@ -3310,6 +3348,14 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	defer releaseHarness()
 	if !rec.IsTerminated {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotRestorable)
+	}
+	ctx, _, releaseAdmission, err := m.reserveSessionAdmission(ctx, rec.ProjectID, rec.Kind, rec.ID)
+	if err != nil {
+		return RestoreResult{}, m.queueRestoreAdmission(ctx, rec, err)
+	}
+	defer releaseAdmission()
+	if err := m.reserveWorkspaceOwner(ctx, rec.ID, rec.Metadata.WorkspacePath); err != nil {
+		return RestoreResult{}, err
 	}
 	if held, err := m.importHeldByLiveSession(ctx, rec); err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
@@ -3651,6 +3697,9 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrNotFound)
 	}
+	if err := checkSessionLaunchPolicy(rec.Harness, rec.Mode); err != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
+	}
 	if rec.HibernatedAt != nil && m.persistentHostReconcileDone != nil {
 		select {
 		case <-m.persistentHostReconcileDone:
@@ -3886,6 +3935,17 @@ func (m *Manager) relaunchSessionWithPolicy(
 }
 
 func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy, promptOverride *string) (RestoreResult, error) {
+	if err := checkSessionLaunchPolicy(rec.Harness, rec.Mode); err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	}
+	ctx, _, releaseAdmission, admissionErr := m.reserveSessionAdmission(ctx, rec.ProjectID, rec.Kind, rec.ID)
+	if admissionErr != nil {
+		return RestoreResult{}, admissionErr
+	}
+	defer releaseAdmission()
+	if err := m.reserveWorkspaceOwner(ctx, rec.ID, ws.Path); err != nil {
+		return RestoreResult{}, err
+	}
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
 	// after stopping the old controller, then reuses this ordinary restore path.
@@ -4586,6 +4646,15 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 // ReconcileStartupSafety closes interrupted operations or quarantines ambiguous
 // interface targets with a restored input fence before the API accepts input.
 func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
+	if err := m.LoadAdmissionLimits(ctx); err != nil {
+		return err
+	}
+
+	if store, ok := m.store.(sessionAdmissionStore); ok {
+		if err := store.RecoverSessionAdmission(ctx, m.admission.owner, m.clock()); err != nil {
+			return fmt.Errorf("reconcile admission queue: %w", err)
+		}
+	}
 	m.startTransitionMessageDispatcher(ctx)
 	_, err := m.recoverInterruptedInterfaceTransitions(ctx)
 	if err != nil {
@@ -4802,6 +4871,16 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 // shutdown, acquiring the project workspace gate so cleanup does not tear down
 // its workspace while restore is in progress.
 func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecord) {
+	ctx, _, releaseAdmission, admissionErr := m.reserveSessionAdmission(ctx, rec.ProjectID, rec.Kind, rec.ID)
+	if admissionErr != nil {
+		m.logger.Warn("restore-all: capacity deferred; restore markers preserved", "sessionID", rec.ID, "error", admissionErr)
+		return
+	}
+	defer releaseAdmission()
+	if err := m.reserveWorkspaceOwner(ctx, rec.ID, rec.Metadata.WorkspacePath); err != nil {
+		m.logger.Warn("restore-all: workspace owner is not available; restore markers preserved", "sessionID", rec.ID, "error", err)
+		return
+	}
 	releaseWorkspaceGate := m.acquireWorkspaceGate(rec.ProjectID)
 	defer releaseWorkspaceGate()
 
@@ -5382,7 +5461,9 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		return ErrNotFound
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		handled, sendErr := m.sendChat(ctx, id, message, clientMessageID, ports.MessageDeliveryOptions{})
+		deliveryID, valid := domain.ReportDeliveryID(domain.WrapReportDelivery(clientMessageID, message))
+		reportDelivery := valid && deliveryID == clientMessageID && strings.HasPrefix(clientMessageID, "report-batch:")
+		handled, sendErr := m.sendChat(ctx, id, message, clientMessageID, ports.MessageDeliveryOptions{ReportDelivery: reportDelivery})
 		if !handled {
 			return ErrSemanticAcceptanceUnsupported
 		}
@@ -7047,7 +7128,7 @@ func (m *Manager) provisionWorkspace(ctx context.Context, project domain.Project
 		// from what its cloned dependencies were installed from.
 		aoEnv = map[string]string{"AO_FORK": "1"}
 	}
-	return runPostCreate(ctx, workspacePath, project.Path, project.Config.PostCreate, project.Config.Env, aoEnv)
+	return runPostCreate(withWorkspaceScriptProject(ctx, domain.ProjectID(project.ID)), workspacePath, project.Path, project.Config.PostCreate, project.Config.Env, aoEnv)
 }
 
 // applySymlinks links each repo-relative path into the workspace. A source that

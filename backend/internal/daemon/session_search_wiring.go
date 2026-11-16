@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"time"
@@ -41,6 +42,28 @@ func startSessionSearch(ctx context.Context, store *sqlite.Store, stateDir strin
 	if err != nil {
 		logger.Warn("session search: transcript roots unavailable; native transcripts will not be indexed", "err", err)
 	}
+	return startSessionSearchResolved(ctx, store, roots, logger)
+}
+
+// startSessionSearchWithRoots never resolves a user home or provider default.
+// All transcript roots must be explicit absolute paths before any indexer starts.
+func startSessionSearchWithRoots(ctx context.Context, store *sqlite.Store, roots sessionsearch.TranscriptRoots, logger *slog.Logger) (*sessionsearch.Service, error) {
+	if store == nil || logger == nil {
+		return nil, errors.New("session search requires a store and logger")
+	}
+	for _, path := range []string{roots.ClaudeProjects, roots.CodexSessions, roots.CodexArchived, roots.OpenCodeData, roots.OpenCodeV2Data, roots.AOStateDir} {
+		if !filepath.IsAbs(path) {
+			return nil, errors.New("session search requires explicit absolute transcript roots")
+		}
+	}
+	if err := store.SessionSearchUnavailable(); err != nil {
+		logger.Warn("session search is off; nothing else is affected", "reason", err)
+		return sessionsearch.New(sessionsearch.Options{Logger: logger}), nil
+	}
+	return startSessionSearchResolved(ctx, store, roots, logger), nil
+}
+
+func startSessionSearchResolved(ctx context.Context, store *sqlite.Store, roots sessionsearch.TranscriptRoots, logger *slog.Logger) *sessionsearch.Service {
 	service := sessionsearch.New(sessionsearch.Options{
 		Store:  store,
 		Roots:  roots,
@@ -48,7 +71,7 @@ func startSessionSearch(ctx context.Context, store *sqlite.Store, stateDir strin
 		PRs:    store,
 		Logger: logger,
 	})
-	go runSessionSearch(ctx, service, logger)
+	startDaemonWorker(ctx, func() { runSessionSearch(ctx, service, logger) })
 	return service
 }
 

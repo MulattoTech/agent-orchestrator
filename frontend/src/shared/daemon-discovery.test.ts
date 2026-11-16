@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createListenPortScanner, defaultRunFilePath, parseDaemonListenPort, parseRunFile } from "./daemon-discovery";
+import { createListenPortScanner, defaultRunFilePath, parseDaemonListenPort, parseRunFile, windowsSupervisorAddress } from "./daemon-discovery";
 
 // Real shape emitted by slog's TextHandler in backend/internal/httpd/server.go.
 const LISTEN_LINE = 'time=2026-06-10T09:15:04.221-07:00 level=INFO msg="daemon listening" addr=127.0.0.1:3001 pid=4242';
@@ -139,5 +139,26 @@ describe("defaultRunFilePath", () => {
 		expect(defaultRunFilePath("linux", {}, "")).toBeNull();
 		expect(defaultRunFilePath("darwin", {}, "")).toBeNull();
 		expect(defaultRunFilePath("win32", {}, "")).toBeNull();
+	});
+});
+
+describe("windowsSupervisorAddress", () => {
+	it("uses exactly the published complete-root supervisor locator", () => {
+		const address = String.raw`\\.\pipe\ao-supervise-v2-` + "a".repeat(64);
+		const info = parseRunFile(JSON.stringify({ pid: 42, port: 3037, supervisorAddress: address }));
+		expect(info?.supervisorAddress).toBe(address);
+		expect(windowsSupervisorAddress(info)).toBe(address);
+	});
+	it("never falls back to legacy basename, missing or foreign locators", () => {
+		for (const address of [
+			undefined, null, 123, "", String.raw`\\.\pipe\ao-supervise`,
+			String.raw`\\.\pipe\ao-supervise-state`, "/tmp/supervise.sock",
+			String.raw`\\other-host\pipe\ao-supervise-v2-` + "a".repeat(64),
+			String.raw`\\.\pipe\ao-supervise-v2-` + "g".repeat(64),
+		]) {
+			const info = parseRunFile(JSON.stringify({ pid: 42, port: 3037, supervisorAddress: address }));
+			expect(windowsSupervisorAddress(info)).toBeNull();
+		}
+		expect(windowsSupervisorAddress(null)).toBeNull();
 	});
 });

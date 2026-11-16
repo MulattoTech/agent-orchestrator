@@ -45,6 +45,7 @@ func TestIsChildAlivePreservesInconclusiveStatus(t *testing.T) {
 			if payload != "{" && !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
 				t.Fatalf("incomplete child status %q = %v; want inconclusive exit evidence", payload, err)
 			}
+			_ = listener.Close()
 			<-done
 		})
 	}
@@ -94,7 +95,7 @@ func TestShellReconciliationClosesHostAfterChildExit(t *testing.T) {
 			isolateRegistry(t)
 			hosts := map[string]*inProcHost{}
 			// This host runs inside the test. Never give Destroy a real PID.
-			rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, deadPID())})
+			rt := newFakeRuntime(t, hosts, deadPID())
 			ctx := context.Background()
 			handle, err := rt.Create(ctx, ports.RuntimeConfig{
 				SessionID: "shellterm-exit", WorkspacePath: t.TempDir(), Argv: []string{"sh"},

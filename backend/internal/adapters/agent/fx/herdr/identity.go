@@ -3,16 +3,16 @@ package herdr
 
 import (
 	"encoding/base64"
-	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// SocketPath keeps the daemon's socket inside its configured data directory.
+// SocketPath identifies this data root's private native IPC endpoint.
+// Unix uses a file in the data root; Windows uses a bounded named-pipe name.
 func SocketPath(dataDir string) string {
-	return filepath.Join(dataDir, "run", "fx-herdr.sock")
+	return platformSocketPath(dataDir)
 }
 
 // PaneID binds fx's native pane identity to one AO session and runtime launch.

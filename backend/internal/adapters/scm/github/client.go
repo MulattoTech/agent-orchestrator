@@ -92,7 +92,7 @@ type Client struct {
 // cacheMaxEntries caps the number of distinct (method,path,query) tuples
 // the in-memory ETag cache will track. A single Provider observes one PR
 // at a time today, but the follow-up poller will reuse one Provider for
-// the whole daemon — without a cap, long-running daemons would grow this
+// the whole daemon â€” without a cap, long-running daemons would grow this
 // map forever.
 const cacheMaxEntries = 512
 
@@ -182,7 +182,7 @@ func (c *Client) doRESTWithETag(ctx context.Context, path string, q url.Values, 
 // scoped to the (method, path, query) tuple so repeated PR observations
 // against the same endpoint replay from the cache while observations of a
 // different PR don't share state. Only GET requests participate in the
-// cache — mutating methods would mis-replay 304s as the previous payload.
+// cache â€” mutating methods would mis-replay 304s as the previous payload.
 func (c *Client) doREST(ctx context.Context, method, path string, q url.Values, body any) (RESTResponse, error) {
 	cacheable := method == http.MethodGet
 	cacheKey := method + " " + path + "?" + q.Encode()
@@ -225,7 +225,18 @@ func (c *Client) doREST(ctx context.Context, method, path string, q url.Values, 
 		return RESTResponse{}, err
 	}
 
-	resp, err := c.http.Do(req)
+	requestClient := c.http
+	if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+		// A REST mutation has no provider idempotency guarantee. Do not let
+		// net/http replay its body on a 307/308 redirect or transport retry.
+		// Keep the configured client/transport/timeouts, but never mutate the
+		// shared client while concurrent observation GETs are using it.
+		req.GetBody = nil
+		singleAttempt := *c.http
+		singleAttempt.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+		requestClient = &singleAttempt
+	}
+	resp, err := requestClient.Do(req)
 	if err != nil {
 		return RESTResponse{}, fmt.Errorf("github scm: %s %s: %w", method, path, err)
 	}
@@ -233,7 +244,7 @@ func (c *Client) doREST(ctx context.Context, method, path string, q url.Values, 
 
 	if cacheable && resp.StatusCode == http.StatusNotModified {
 		// Replay the cached body. Update the ETag if GitHub returned a
-		// fresher one — some endpoints rotate ETags on weak revalidation.
+		// fresher one â€” some endpoints rotate ETags on weak revalidation.
 		newETag := resp.Header.Get("ETag")
 		if newETag != "" && newETag != prevETag {
 			c.mu.Lock()
@@ -359,7 +370,7 @@ func (c *Client) fetchPlainText(ctx context.Context, path string) ([]byte, error
 	// The /actions/jobs/{id}/logs endpoint validates the Accept header
 	// before issuing its 302 to the log blob; sending text/plain here
 	// gets a 406. The canonical Accept for the GitHub REST API is the
-	// vnd.github+json media type — the redirected blob serves the
+	// vnd.github+json media type â€” the redirected blob serves the
 	// actual text/plain regardless of what we asked for.
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", c.userAgent)

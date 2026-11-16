@@ -12906,6 +12906,63 @@ paths:
       summary: Archive a worker's reviewer and hide its surface while retaining history
       tags:
       - reviews
+  /api/v1/sessions/{sessionId}/reviews/publish:
+    post:
+      operationId: publishSavedReview
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersPublishReviewInput'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewPublicationResult'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Publish or verify a saved review without model inference
+      tags:
+      - reviews
   /api/v1/sessions/{sessionId}/reviews/rerequest:
     post:
       operationId: requestRereview
@@ -18658,6 +18715,14 @@ components:
       - kind
       - title
       type: object
+    ControllersPublishReviewInput:
+      properties:
+        runId:
+          description: Saved complete review run to publish or verify.
+          type: string
+      required:
+      - runId
+      type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
         hostId:
@@ -20458,6 +20523,19 @@ components:
       required:
       - turnId
       - deliveredWithTurnId
+      type: object
+    DomainPRCompletionDependency:
+      properties:
+        headSha:
+          type: string
+        prUrl:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - prUrl
+      - headSha
       type: object
     DomainReviewerConfig:
       properties:
@@ -23013,6 +23091,26 @@ components:
         turnId:
           type: string
       type: object
+    ReviewPublicationResult:
+      properties:
+        providerReviewUrl:
+          type: string
+        providerState:
+          enum:
+          - COMMENTED
+          - APPROVED
+          - CHANGES_REQUESTED
+          type: string
+        reused:
+          type: boolean
+        review:
+          $ref: '#/components/schemas/ReviewRun'
+      required:
+      - review
+      - providerState
+      - providerReviewUrl
+      - reused
+      type: object
     ReviewRun:
       properties:
         autoInjectReview:
@@ -25244,6 +25342,11 @@ components:
         accountId:
           maxLength: 128
           type: string
+        admissionDependencies:
+          items:
+            type: string
+          maxItems: 64
+          type: array
         approvalMode:
           enum:
           - default
@@ -25331,6 +25434,11 @@ components:
           type: string
         parentSessionId:
           type: string
+        prCompletionDependencies:
+          items:
+            $ref: '#/components/schemas/DomainPRCompletionDependency'
+          maxItems: 64
+          type: array
         projectId:
           type: string
         prompt:

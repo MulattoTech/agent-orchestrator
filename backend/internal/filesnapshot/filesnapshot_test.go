@@ -278,7 +278,8 @@ func TestSnapshotsRunNoRepositoryHooks(t *testing.T) {
 	repo := newRepo(t)
 	hooks, marker := t.TempDir(), filepath.Join(t.TempDir(), "fired")
 	for _, hook := range []string{"post-index-change", "reference-transaction"} {
-		write(t, hooks, hook, "#!/bin/sh\necho "+hook+" >> "+marker+"\n")
+		quotedMarker := "'" + strings.ReplaceAll(filepath.ToSlash(marker), "'", "'\"'\"'") + "'"
+		write(t, hooks, hook, "#!/bin/sh\necho "+hook+" >> "+quotedMarker+"\n")
 		if err := os.Chmod(filepath.Join(hooks, hook), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -611,6 +612,8 @@ func newRepo(t *testing.T) string {
 	runGit(t, repo, "init", "-q", "-b", "main")
 	runGit(t, repo, "config", "user.email", "test@example.com")
 	runGit(t, repo, "config", "user.name", "Test")
+	// Byte restoration assertions must not inherit a host line-ending policy.
+	runGit(t, repo, "config", "core.autocrlf", "false")
 	write(t, repo, "a.txt", "a\n")
 	write(t, repo, "b.txt", "b\n")
 	write(t, repo, ".gitignore", "build/\n")

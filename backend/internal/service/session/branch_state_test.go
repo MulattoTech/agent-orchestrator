@@ -61,7 +61,7 @@ func TestReconcileSessionBranchStateTracksCommitsAndPushes(t *testing.T) {
 	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{
 		WorkspacePath: repo, DiffBaseRef: "refs/remotes/origin/main",
 	}}
-	svc := &Service{store: st}
+	svc := &Service{store: st, branchStateGit: NewBranchStateGit()}
 	reconcile := func(want domain.SessionBranchState) {
 		t.Helper()
 		if err := svc.ReconcileSessionBranchState(context.Background(), "ao-1"); err != nil {
@@ -103,7 +103,7 @@ func TestReconcileBranchStatesFollowsTheWorktreeBranch(t *testing.T) {
 	st.sessions["s1"] = domain.SessionRecord{ID: "s1", Metadata: domain.SessionMetadata{
 		Branch: "ao/s1/root", WorkspacePath: worktree, DiffBaseRef: "refs/remotes/origin/main",
 	}}
-	svc := &Service{store: st}
+	svc := &Service{store: st, branchStateGit: NewBranchStateGit()}
 	reconcile := func(want domain.SessionBranchState) {
 		t.Helper()
 		if err := svc.ReconcileBranchStates(context.Background()); err != nil {
@@ -136,7 +136,7 @@ func TestReconcileBranchStatesRunsGitOnlyWhenTipsMove(t *testing.T) {
 			WorkspacePath: worktree, DiffBaseRef: "refs/remotes/origin/main",
 		}}
 	}
-	svc := &Service{store: st}
+	svc := &Service{store: st, branchStateGit: NewBranchStateGit()}
 	gitCalls := countGitCalls(t)
 	pass := func() int {
 		t.Helper()
@@ -167,7 +167,7 @@ func TestReconcileBranchStatesRunsGitOnlyWhenTipsMove(t *testing.T) {
 
 func reconcileOne(t *testing.T, st *branchStateStore, id domain.SessionID) *domain.SessionBranchState {
 	t.Helper()
-	if err := (&Service{store: st}).ReconcileSessionBranchState(context.Background(), id); err != nil {
+	if err := (&Service{store: st, branchStateGit: NewBranchStateGit()}).ReconcileSessionBranchState(context.Background(), id); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	return st.sessions[id].BranchState
@@ -275,7 +275,7 @@ func TestBranchBaseNames(t *testing.T) {
 func TestReconcileSessionBranchStateSkipsTerminatedSessions(t *testing.T) {
 	st := &branchStateStore{fakeStore: newFakeStore()}
 	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", IsTerminated: true, Metadata: domain.SessionMetadata{WorkspacePath: t.TempDir()}}
-	if err := (&Service{store: st}).ReconcileSessionBranchState(context.Background(), "ao-1"); err != nil {
+	if err := (&Service{store: st, branchStateGit: NewBranchStateGit()}).ReconcileSessionBranchState(context.Background(), "ao-1"); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if st.writes != 0 {

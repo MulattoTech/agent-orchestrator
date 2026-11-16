@@ -141,6 +141,49 @@ func planFileRestore(ctx context.Context, workspace string, session domain.Sessi
 	return restore, "", nil
 }
 
+// snapshotProjectReader is deliberately narrower than the project service.
+// Production uses the same persisted store as Sessions; no launch parameter can
+// change a Scratch project's eligibility for Git snapshots.
+type snapshotProjectReader interface {
+	GetProject(context.Context, string) (domain.ProjectRecord, bool, error)
+}
+
+func (s *Service) sessionFileSnapshotCapture(id domain.SessionID) filesnapshot.CaptureFunc {
+	return func(ctx context.Context, workspace string, refs ...string) error {
+		if s.sessions != nil {
+			record, found, err := s.sessions.GetSession(ctx, id)
+			if err != nil {
+				return fmt.Errorf("read file snapshot session: %w", err)
+			}
+			if !found {
+				return ports.ErrSessionNotFound
+			}
+			projects, ok := s.sessions.(snapshotProjectReader)
+			if !ok {
+				projects, ok = s.store.(snapshotProjectReader)
+			}
+			if ok && record.ProjectID != "" {
+				project, found, err := projects.GetProject(ctx, string(record.ProjectID))
+				if err != nil {
+					return fmt.Errorf("read file snapshot project: %w", err)
+				}
+				if !found {
+					return fmt.Errorf("file snapshot project %s was not found", record.ProjectID)
+				}
+				// A Scratch workspace remains a plain-directory project even if
+				// an agent creates .git. Do not inspect it by starting Git.
+				if project.Kind == domain.ProjectKindScratch {
+					return nil
+				}
+			}
+		}
+		if s.fileSnapshotCapture == nil {
+			return errors.New("file snapshot capture effect is unavailable")
+		}
+		return s.fileSnapshotCapture(ctx, workspace, refs...)
+	}
+}
+
 // snapshotFiles records the worktree before turns reach the provider, so rolling
 // one back can also put its files back, and a fork of an older turn can start
 // from them. Only a session whose agent can roll back, or whose forks can start
@@ -169,7 +212,13 @@ func (c *Controller) snapshotFiles(ctx context.Context, turnIDs []string) {
 	}
 	captureCtx, cancel := context.WithTimeout(ctx, fileSnapshotBudget)
 	defer cancel()
-	if err := filesnapshot.Capture(captureCtx, c.workspacePath, refs...); err != nil {
+	var err error
+	if c.fileSnapshotCapture == nil {
+		err = errors.New("file snapshot capture effect is unavailable")
+	} else {
+		err = c.fileSnapshotCapture(captureCtx, c.workspacePath, refs...)
+	}
+	if err != nil {
 		level := slog.LevelWarn
 		switch {
 		case errors.Is(err, filesnapshot.ErrNotRepository):
