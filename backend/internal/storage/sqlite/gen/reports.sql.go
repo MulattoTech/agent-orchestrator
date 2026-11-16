@@ -852,3 +852,27 @@ func (q *Queries) RequeueClaimedReports(ctx context.Context) (int64, error) {
 	}
 	return result.RowsAffected()
 }
+
+const requeueUndispatchedReportBatch = `-- name: RequeueUndispatchedReportBatch :exec
+UPDATE reports
+SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
+    acknowledged_at = NULL, available_at = min(available_at, ?1),
+    last_error = 'accepted report context withdrawn before provider dispatch'
+WHERE delivery_state = 'acknowledged'
+  AND delivery_batch_id = ?2
+  AND reports.project_id = (SELECT conversations.project_id FROM conversations WHERE conversations.id = ?3)
+`
+
+type RequeueUndispatchedReportBatchParams struct {
+	AvailableAt     interface{}
+	DeliveryBatchID string
+	ConversationID  string
+}
+
+// A human can withdraw an undispatched queue item after its report batch was
+// acknowledged as durably accepted. Restore that batch atomically with cancel.
+// The conversation's project fences a forged/corrupt cross-project reference.
+func (q *Queries) RequeueUndispatchedReportBatch(ctx context.Context, arg RequeueUndispatchedReportBatchParams) error {
+	_, err := q.db.ExecContext(ctx, requeueUndispatchedReportBatch, arg.AvailableAt, arg.DeliveryBatchID, arg.ConversationID)
+	return err
+}

@@ -416,6 +416,10 @@ type ChatMCPServerConfig struct {
 // ChatInternalReplayResourceURI is reserved for AO's reconstructed edit context.
 const ChatInternalReplayResourceURI = "ao://conversation/edit-replay"
 
+// ChatWorkerReportURIPrefix binds internal report context to its durable batch.
+// Public request DTOs cannot set Internal, so callers cannot manufacture receipts.
+const ChatWorkerReportURIPrefix = "ao://worker-reports/"
+
 // ChatExcerptResourceURIPrefix identifies legacy AO-verified transcript excerpts.
 // Captured snapshots carry user-supplied context without resolving this URI.
 const ChatExcerptResourceURIPrefix = "ao://conversation-excerpt/"
