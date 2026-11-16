@@ -92,12 +92,14 @@ func (c *conversation) guardedRequest(ctx context.Context, id, method string, pa
 	if c.guard == nil {
 		return c.conn.request(ctx, method, params, out)
 	}
-	c.mu.Lock()
-	c.guardRequest = id
-	c.guardTurn = ""
-	c.mu.Unlock()
 	err := c.conn.requestWithWrite(ctx, method, params, out, func(write func() error) error {
-		return c.guard.Dispatch(ctx, inferenceguard.Request{ID: id, Session: c.guardSession, Project: c.guardProject, Operation: method, Selection: s}, write)
+		return c.guard.Dispatch(ctx, inferenceguard.Request{ID: id, Session: c.guardSession, Project: c.guardProject, Operation: method, Selection: s}, func() error {
+			c.mu.Lock()
+			c.guardRequest = id
+			c.guardTurn = ""
+			c.mu.Unlock()
+			return write()
+		})
 	})
 	if err != nil {
 		if isGuardQuotaError(err) {
@@ -106,9 +108,12 @@ func (c *conversation) guardedRequest(ctx context.Context, id, method string, pa
 			}
 		}
 		var rpcErr *rpcError
-		// A native RPC rejection is definitive; transport timeout/EOF is ambiguous.
-		if errors.As(err, &rpcErr) {
-			_ = c.guard.SettleRequest(context.WithoutCancel(ctx), id, "provider_refusal")
+		// Only protocol validation/method refusals establish a rejected request.
+		// Internal/server errors can follow acceptance and are not proof of no work.
+		if errors.As(err, &rpcErr) && (rpcErr.Code == -32600 || rpcErr.Code == -32601 || rpcErr.Code == -32602) {
+			_ = c.guard.SettleRequest(context.WithoutCancel(ctx), id, "provider_validation_refusal")
+		} else if !inferenceguard.PreDispatchRefusal(err) {
+			_ = c.guard.MarkUncertain(context.WithoutCancel(ctx), id, "provider_acknowledgement_unknown")
 		}
 		c.mu.Lock()
 		if c.guardRequest == id {
@@ -151,12 +156,8 @@ func (c *conversation) observeGuardEvent(ev ports.ChatEvent) {
 		return
 	}
 	if ev.Kind == ports.ChatEventTurnStarted {
-		c.mu.Lock()
-		if c.guardTurn == "" {
-			c.guardTurn = ev.ProviderTurnID
-		}
-		c.mu.Unlock()
-		c.interruptIfGuardStopped()
+		// A replayed root start is not correlated to our pending request. Only the
+		// turn/start RPC acknowledgement may bind that request to a native turn.
 		return
 	}
 	if ev.Kind != ports.ChatEventTurnCompleted {
