@@ -338,6 +338,11 @@ func seedDaemonFixture(t *testing.T, root string) fixtureSeedState {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Resume uses durable conversation choices, including an explicitly empty
+		// effort. Session metadata alone is not the authoritative next-turn policy.
+		if err = store.SetConversationSettings(ctx, conversation.ID, domain.ConversationSettings{Model: fixtureAgentModel, ReasoningEffort: fixtureAgentEffort}, now); err != nil {
+			t.Fatal(err)
+		}
 		if err = store.ClaimChatControllerGeneration(ctx, id, generation); err != nil {
 			t.Fatal(err)
 		}

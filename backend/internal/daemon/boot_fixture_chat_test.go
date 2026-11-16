@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -158,4 +159,25 @@ func (c *fixtureChatConversation) SendTurn(ctx context.Context, msg ports.ChatUs
 		c.events <- ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: nativeTurn, ProviderConversationID: c.cfg.ProviderConversationID, TurnState: domain.TurnStateCompleted}
 	}
 	return ports.ChatTurnRef{ProviderTurnID: nativeTurn}, nil
+}
+func TestFixtureChatRejectsMissingOrExcessiveModelPolicy(t *testing.T) {
+	for _, choice := range []struct{ name, model, effort string }{
+		{"missing effort", fixtureAgentModel, ""},
+		{"high effort", fixtureAgentModel, "high"},
+		{"wrong model", "unexpected-model", fixtureAgentEffort},
+	} {
+		t.Run(choice.name, func(t *testing.T) {
+			root := t.TempDir()
+			effects := &fixtureEffectRecorder{}
+			driver := &fixtureChatDriver{root: root, phase: "crash", effects: effects}
+			_, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+				SessionID: "fixture-project-2", ProviderConversationID: "synthetic-thread-fixture-project-2",
+				WorkspacePath: filepath.Join(root, "workspaces", "fixture-project-2"),
+				Model:         choice.model, Effort: choice.effort,
+			})
+			if err == nil || len(effects.entries) != 1 || effects.entries[0].Kind != "forbidden" || effects.entries[0].Name != "chat.model-policy-mismatch" {
+				t.Fatalf("policy error=%v effects=%+v", err, effects.entries)
+			}
+		})
+	}
 }

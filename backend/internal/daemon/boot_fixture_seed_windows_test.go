@@ -38,6 +38,13 @@ func TestOfflineDaemonSeedUsesAllocatedIdentitiesAndDurableHolds(t *testing.T) {
 	}
 	live := map[domain.SessionID]bool{}
 	for _, rec := range records {
+		conversation, err := store.ConversationForSession(ctx, rec.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if conversation.Settings.Model != fixtureAgentModel || conversation.Settings.ReasoningEffort != fixtureAgentEffort {
+			t.Fatalf("durable resume settings for %s = model %q effort %q", rec.ID, conversation.Settings.Model, conversation.Settings.ReasoningEffort)
+		}
 		if rec.Metadata.ProviderConversationID != "synthetic-thread-"+string(rec.ID) {
 			t.Fatalf("native thread identity does not match allocated session %s", rec.ID)
 		}
