@@ -5427,7 +5427,9 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		return ErrNotFound
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		handled, sendErr := m.sendChat(ctx, id, message, clientMessageID, ports.MessageDeliveryOptions{})
+		deliveryID, valid := domain.ReportDeliveryID(domain.WrapReportDelivery(clientMessageID, message))
+		reportDelivery := valid && deliveryID == clientMessageID && strings.HasPrefix(clientMessageID, "report-batch:")
+		handled, sendErr := m.sendChat(ctx, id, message, clientMessageID, ports.MessageDeliveryOptions{ReportDelivery: reportDelivery})
 		if !handled {
 			return ErrSemanticAcceptanceUnsupported
 		}

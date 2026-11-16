@@ -496,6 +496,39 @@ func (q *Queries) CancelAllQueuedConversationTurns(ctx context.Context, arg Canc
 	return err
 }
 
+const cancelQueuedConversationCommandsForHandoff = `-- name: CancelQueuedConversationCommandsForHandoff :exec
+UPDATE conversation_turns
+SET state = 'interrupted', completed_at = ?
+WHERE conversation_turns.conversation_id = ? AND conversation_turns.state = 'queued'
+  -- Interface handoff cancels queued commands, not accepted internal reports.
+  -- Keep their original turn and client id; resetting ACK would make replay
+  -- dedupe against a cancelled turn and silently accept an undelivered report.
+  -- Require a same-project report row, not merely a caller-chosen prefix.
+  AND NOT EXISTS (
+      SELECT 1
+      FROM conversation_messages
+      JOIN conversations ON conversations.id = conversation_messages.conversation_id
+      JOIN reports ON reports.project_id = conversations.project_id
+                  AND reports.delivery_batch_id = conversation_messages.client_message_id
+      WHERE conversation_messages.turn_id = conversation_turns.id
+        AND conversation_messages.role = 'user'
+        AND conversation_messages.origin = 'automation'
+        AND conversation_messages.client_message_id LIKE 'report-batch:%'
+        AND conversation_turns.provider_turn_id = ''
+        AND conversation_turns.promotion_started_at IS NULL
+  )
+`
+
+type CancelQueuedConversationCommandsForHandoffParams struct {
+	CompletedAt    sql.NullTime
+	ConversationID string
+}
+
+func (q *Queries) CancelQueuedConversationCommandsForHandoff(ctx context.Context, arg CancelQueuedConversationCommandsForHandoffParams) error {
+	_, err := q.db.ExecContext(ctx, cancelQueuedConversationCommandsForHandoff, arg.CompletedAt, arg.ConversationID)
+	return err
+}
+
 const cancelQueuedConversationTurnByID = `-- name: CancelQueuedConversationTurnByID :execrows
 UPDATE conversation_turns
 SET state = 'cancelled', completed_at = ?
@@ -5279,7 +5312,15 @@ UPDATE conversation_turns
 SET state = 'failed',
     error_message = 'controller ended before the turn completed',
     completed_at = ?
-WHERE handled_by_session_id = ? AND state IN ('queued', 'running')
+WHERE conversation_turns.handled_by_session_id = ? AND conversation_turns.state IN ('queued', 'running')
+  -- A durable queue is not in-flight work. Preserve only proof that no
+  -- provider write or promotion happened; ambiguous work never auto-resumes.
+  AND NOT (
+      conversation_turns.state = 'queued'
+      AND conversation_turns.provider_turn_id = ''
+      AND conversation_turns.provider_input_text = ''
+      AND conversation_turns.promotion_started_at IS NULL
+  )
 `
 
 type SettleOrphanedConversationTurnsParams struct {

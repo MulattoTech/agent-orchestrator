@@ -1858,7 +1858,7 @@ func terminalActivityStatus(state domain.TurnState) domain.ActivityStatus {
 
 // SettleOrphanedTurns marks anything a dead controller left in flight. A turn the
 // controller was running is not evidence the work finished, so it settles as
-// failed rather than silently completing.
+// failed rather than silently completing. Proven undispatched queue rows remain\n// durable for a replacement controller; explicit user cancellation is separate.
 func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -2920,7 +2920,7 @@ func (s *Store) CancelQueuedTurns(
 	})
 }
 
-// CancelAllQueuedTurns closes the whole durable queue after an interface
+// CancelAllQueuedTurns closes queued commands after an interface
 // handoff has synchronously fenced intake and promotion. Unlike an ordinary Stop
 // action, there is no post-request message to preserve with a timestamp cutoff.
 func (s *Store) CancelAllQueuedTurns(
@@ -2934,7 +2934,7 @@ func (s *Store) CancelAllQueuedTurns(
 		if err := requeueReportsBeforeQueueCancellation(ctx, q, conversationID, time.Time{}, now); err != nil {
 			return err
 		}
-		return q.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
+		return q.CancelQueuedConversationCommandsForHandoff(ctx, gen.CancelQueuedConversationCommandsForHandoffParams{
 			CompletedAt: sql.NullTime{Time: now, Valid: true}, ConversationID: conversationID,
 		})
 	})
