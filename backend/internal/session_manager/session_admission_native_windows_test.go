@@ -194,7 +194,7 @@ func TestAdmissionNativeWindowsFortyProcessesRecover(t *testing.T) {
 		t.Logf("NATIVE_FAKE_HELPER packaged_sha256=%s", admissionPackagedHelperSHA256)
 	} else {
 		native.executable = filepath.Join(native.root, "admission-worker.exe")
-		build := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go.exe"), "build", "-trimpath", "-o", native.executable, "./testdata/admission-worker/main.go")
+		build := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go.exe"), "build", "-trimpath", "-o", native.executable, "./testdata/admission-worker")
 		build.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off", "GOWORK=off", "GOENV=off", "GOFLAGS=", "CGO_ENABLED=0", "GOMAXPROCS=2")
 		if output, err := build.CombinedOutput(); err != nil {
 			t.Fatalf("build stdlib-only helper: %v %s", err, output)

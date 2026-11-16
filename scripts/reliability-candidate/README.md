@@ -111,8 +111,18 @@ the parent fixture; an internally created child selects only the owned-child
 test. The child receives a small environment whitelist.
 
 The fixture starts the actual candidate **AO.exe pty-host** with the fixed
-standard-library ao-offline-worker.exe. It exercises Windows terminal streaming,
-detach/reattach, ownership checks and recovery using fixture-owned processes.
+standard-library ao-offline-worker.exe. The helper can spawn only itself with
+two fixed child/grandchild modes. Those descendants deliberately detach from
+the console and ignore stdin; every process has a bounded lifetime and an exact
+PID/creation-time record. The fixture checks Windows terminal streaming,
+detach/reattach, and controller-loss recovery, then verifies that root exit,
+owned Destroy, and host crash end the entire owned CreateProcess tree.
+
+New Windows terminals use an unnamed, non-inheritable Job Object with
+KILL_ON_JOB_CLOSE and no breakaway. JOB_LIST is supplied during suspended
+CreateProcess, membership is verified, and only then is the initial thread
+resumed. The host stays outside its child job. Any containment setup failure
+refuses launch. Existing or recovered hosts are never adopted into a new job.
 It does not use normal daemon startup, a provider/account command, a model turn,
 production AO state or the live-validation launcher. It is an offline
 engineering test; the post-refresh launch time hold does not apply to it.
@@ -128,7 +138,10 @@ record includes source, manifest, companion, AO.exe, helper and log hashes plus
 the exit status. Passing this fixture establishes its stated terminal and
 fixture recovery behavior. It does not establish full daemon boot/restart,
 account bootstrap, native model loops, real agent economics or fleet-wide
-descendant coverage. Record fleet and ConPTY results separately.
+descendant coverage. The Job Object claim applies to newly launched Windows
+terminal CreateProcess descendants; WMI/service/broker-launched processes,
+existing hosts, chat app-server processes, and global CI/test concurrency remain
+outside it. Record fleet and ConPTY results separately.
 
 ## Post-refresh startup is a separate owner action
 

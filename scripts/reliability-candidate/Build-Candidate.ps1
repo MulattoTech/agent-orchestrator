@@ -55,7 +55,7 @@ try {
     $strictFlags = "-X $module/inferenceguard.RequirePolicy=1 -X $module/cli.Version=$version -X $module/cli.Commit=$sourceCommit -X $module/cli.Date=$date"
     & $goTool build -p 1 -trimpath -ldflags $strictFlags -o (Join-Path $releaseDir 'AO.exe') ./cmd/ao 2>&1 | Tee-Object -FilePath $buildLog
     if ($LASTEXITCODE -ne 0) { throw 'Strict AO compilation failed; incomplete artifacts remain for inspection.' }
-    & $goTool build -p 1 -trimpath -o (Join-Path $releaseDir 'ao-offline-worker.exe') ./internal/session_manager/testdata/admission-worker/main.go 2>&1 | Tee-Object -FilePath $buildLog -Append
+    & $goTool build -p 1 -trimpath -o (Join-Path $releaseDir 'ao-offline-worker.exe') ./internal/session_manager/testdata/admission-worker 2>&1 | Tee-Object -FilePath $buildLog -Append
     if ($LASTEXITCODE -ne 0) { throw 'Standard-library fake worker compilation failed.' }
     $helperHash = (Get-FileHash -LiteralPath (Join-Path $releaseDir 'ao-offline-worker.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
     $companionFlags = "-X $module/session_manager.admissionPackagedHelperSHA256=$helperHash -X $module/session_manager.admissionOfflineCompanion=1"
