@@ -31,6 +31,10 @@ type Gate struct {
 	closeErr  error
 	mu        sync.Mutex
 	blocked   atomic.Bool
+	stopMu    sync.Mutex
+	stopNext  uint64
+	stoppers  map[uint64]func(context.Context) error
+	stopping  atomic.Bool
 	db        *sql.DB
 	policy    func() (Policy, error)
 	now       func() time.Time
@@ -265,11 +269,16 @@ func (g *Gate) Dispatch(ctx context.Context, r Request, write func() error) erro
 	if err = tx.QueryRowContext(ctx, "SELECT state,session_id,project_id,role,model,effort,operation,requested_model,requested_effort FROM attempts WHERE id=?", r.ID).Scan(&state, &session, &project, &role, &model, &effort, &operation, &requestedModel, &requestedEffort); err != nil {
 		return err
 	}
-	if session != r.Session || project != r.Project || role != selected.Role || model != selected.Model || effort != selected.Effort || operation != r.Operation || requestedModel != selected.RequestedModel || requestedEffort != selected.RequestedEffort {
+	if session != r.Session || project != r.Project || role != selected.Role || operation != r.Operation {
 		return deny(ErrPolicy, "dispatch id was reused for different work")
 	}
 	if state != "queued" {
 		return deny(ErrUncertain, "dispatch identity already admitted; reconcile the existing receipt instead of repeating it")
+	}
+	// Owner corrections may change an undispatched selection; durable request,
+	// session, role and project identity stay fixed. No admitted receipt is rewritten.
+	if _, err = tx.ExecContext(ctx, "UPDATE attempts SET requested_model=?,requested_effort=?,model=?,effort=? WHERE id=? AND state='queued'", selected.RequestedModel, selected.RequestedEffort, selected.Model, selected.Effort, r.ID); err != nil {
+		return err
 	}
 	refusal := func(e error) error {
 		if err := tx.Commit(); err != nil {
@@ -309,7 +318,11 @@ func (g *Gate) Dispatch(ctx context.Context, r Request, write func() error) erro
 	if _, err = tx.ExecContext(ctx, "UPDATE attempts SET state='active',dispatched_at=?,epoch=?,exception_id=? WHERE id=? AND state='queued'", now, p.AuthorizationEpoch, selected.ExceptionID, r.ID); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO dispatch_events(attempt_id,event,timestamp,detail) VALUES(?,'dispatch',?,?)", r.ID, now, selected.ExceptionID); err != nil {
+	resolution, err := json.Marshal(selected)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO dispatch_events(attempt_id,event,timestamp,detail) VALUES(?,'dispatch',?,?)", r.ID, now, string(resolution)); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -368,9 +381,12 @@ func (g *Gate) SettleRequest(ctx context.Context, id, errorClass string) error {
 
 // Trip is durable and global. No timer or retry clears EXHAUSTED.
 func (g *Gate) Trip(ctx context.Context, resetAt time.Time, source string) error {
-	g.blocked.Store(true)
+	first := !g.blocked.Swap(true)
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if first {
+		defer func() { go func() { _ = g.InterruptActive(context.Background()) }() }()
+	}
 	reset := ""
 	if !resetAt.IsZero() {
 		reset = resetAt.UTC().Format(time.RFC3339Nano)
@@ -488,7 +504,18 @@ func (g *Gate) IngestReceipt(ctx context.Context, r UsageReceipt) error {
 	if err = g.db.QueryRowContext(ctx, "SELECT payload FROM usage_receipts WHERE source_key=?", r.SourceKey).Scan(&stored); err != nil {
 		return err
 	}
-	if stored != string(payload) {
+	var prior UsageReceipt
+	if err := json.Unmarshal([]byte(stored), &prior); err != nil {
+		return err
+	}
+	// Re-observation time is not part of an immutable provider response identity.
+	// Keep the first persisted timestamp while comparing all attribution/counters.
+	prior.ObservedAt = r.ObservedAt
+	semantic, err := json.Marshal(prior)
+	if err != nil {
+		return err
+	}
+	if string(semantic) != string(payload) {
 		return errors.New("usage source key conflict; immutable receipt differs")
 	}
 	return nil
