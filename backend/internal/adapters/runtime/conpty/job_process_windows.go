@@ -33,20 +33,39 @@ type conPTYAttributes interface {
 // Production always uses nativeConPTYJobOperations; there is no fallback that
 // launches an uncontained process when any job/attribute operation fails.
 type conPTYJobOperations struct {
-	newJob     func() (windows.Handle, error)
-	protectJob func(windows.Handle) error
-	limitJob   func(windows.Handle) error
-	attributes func() (conPTYAttributes, error)
-	create     func(*uint16, *uint16, *uint16, *uint16, *windows.StartupInfoEx, uint32) (windows.ProcessInformation, error)
-	member     func(windows.Handle, windows.Handle) (bool, error)
-	resume     func(windows.Handle) (uint32, error)
-	terminate  func(windows.Handle, uint32) error
-	close      func(windows.Handle) error
-	wait       func(windows.Handle) (uint32, error)
-	exitCode   func(windows.Handle) (uint32, error)
+	newJob        func() (windows.Handle, error)
+	protectJob    func(windows.Handle) error
+	limitJob      func(windows.Handle) error
+	attributes    func() (conPTYAttributes, error)
+	attachConsole func(conPTYAttributes, windows.Handle) error
+	create        func(*uint16, *uint16, *uint16, *uint16, *windows.StartupInfoEx, uint32) (windows.ProcessInformation, error)
+	member        func(windows.Handle, windows.Handle) (bool, error)
+	resume        func(windows.Handle) (uint32, error)
+	terminate     func(windows.Handle, uint32) error
+	close         func(windows.Handle) error
+	wait          func(windows.Handle) (uint32, error)
+	exitCode      func(windows.Handle) (uint32, error)
 }
 
 var isProcessInJobProc = windows.NewLazySystemDLL("kernel32.dll").NewProc("IsProcessInJob")
+var updateProcThreadAttributeProc = windows.NewLazySystemDLL("kernel32.dll").NewProc("UpdateProcThreadAttribute")
+
+// PSEUDOCONSOLE takes HPCON itself as lpValue, unlike pointer-valued JOB_LIST.
+// Keep the opaque handle an integer at the syscall boundary: converting it to
+// unsafe.Pointer would invent a Go pointer and retain it in x/sys's pointer
+// container. Passing &console instead would change the native ABI.
+// https://learn.microsoft.com/windows/console/creating-a-pseudoconsole-session
+func attachConPTYConsole(list *windows.ProcThreadAttributeList, console windows.Handle, update func(...uintptr) (uintptr, uintptr, error)) error {
+	result, _, err := update(uintptr(unsafe.Pointer(list)), 0, windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, uintptr(console), unsafe.Sizeof(console), 0, 0)
+	runtime.KeepAlive(list)
+	if result != 0 {
+		return nil
+	}
+	if err == nil || err == syscall.Errno(0) {
+		return windows.ERROR_INVALID_FUNCTION
+	}
+	return err
+}
 
 func nativeConPTYJobOperations() conPTYJobOperations {
 	return conPTYJobOperations{
@@ -61,6 +80,9 @@ func nativeConPTYJobOperations() conPTYJobOperations {
 			return err
 		},
 		attributes: func() (conPTYAttributes, error) { return windows.NewProcThreadAttributeList(2) },
+		attachConsole: func(attributes conPTYAttributes, console windows.Handle) error {
+			return attachConPTYConsole(attributes.List(), console, updateProcThreadAttributeProc.Call)
+		},
 		create: func(application, command, environment, directory *uint16, startup *windows.StartupInfoEx, flags uint32) (windows.ProcessInformation, error) {
 			var pi windows.ProcessInformation
 			// nil security attributes and bInheritHandles=false keep the sole job
@@ -184,7 +206,7 @@ func startConPTYJobWithOperations(console windows.Handle, cwd, command string, a
 	}
 	jobs := []windows.Handle{job}
 	defer func() { attributes.Delete(); runtime.KeepAlive(jobs) }()
-	if err = attributes.Update(windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, unsafe.Pointer(console), unsafe.Sizeof(console)); err != nil {
+	if err = ops.attachConsole(attributes, console); err != nil {
 		return nil, fmt.Errorf("conpty: attach console attribute: %w", err)
 	}
 	if err = attributes.Update(procThreadAttributeJobList, unsafe.Pointer(&jobs[0]), unsafe.Sizeof(jobs[0])); err != nil {
