@@ -101,3 +101,20 @@ WORKSPACE_RETRY_EXHAUSTED and stops automatic retries across daemon restarts.
 Old pending records already at the budget stop without another removal attempt.
 Dirty/locked/unsafe worktrees remain preserved. The owner can explicitly retry
 after fixing the external cause; this does not reopen an automatic retry loop.
+
+## Read-only controller health
+
+HealthSnapshot(ctx) separates durable occupancy from live controller/process
+evidence. It probes only the stored runtime handle with its exact launch
+generation, rechecks durable ownership after observation, uses at most four
+observers and a two-second overall budget, and never starts or reconnects a
+provider. Missing children make the aggregate DEGRADED while SQLite/API reads
+can still succeed. Identity mismatches and failed probes stay UNKNOWN.
+
+Chat's local event-controller registry can prove an attachment or its absence,
+but does not prove the native process/descendant tree. The snapshot preserves that
+distinction. verifiedRuntimeProcesses is a measured lower bound for owned TUI
+runtime children; runningToolProcesses remains null without a descendant
+observer. Intentionally stopped, hibernated and provisioning sessions are shown
+separately. The native Windows fixture verifies HEALTHY changes to DEGRADED
+after one owned child exits, before any reconciliation changes durable state.
