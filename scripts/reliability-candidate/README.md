@@ -63,12 +63,16 @@ The recipe:
    worker's exact SHA-256.
 5. Compiles a separate ConPTY test executable with its fixed parent/owned-child
    TestMain selectors. This is still go test -c; compilation launches no fixture.
-6. Writes a **new** C:\AODev\releases\ao-unofficial-UTC-commit12 directory,
+6. Compiles a separate daemon test executable with a fixed parent/owned-child
+   selector, complete explicit fake external effects, strict policy and the
+   exact source commit linked into the executable.
+7. Verifies that all five executables are unsigned and writes a **new**
+   C:\AODev\releases\ao-unofficial-UTC-commit12 directory,
    per-file hashes, and a manifest/digest. It leaves failed artifacts intact for
    inspection and never overwrites an earlier release.
 
 The build script executes no resulting binary, daemon, provider, or test.
-The two go test -c invocations compile the offline companions. Build manifests report
+The three go test -c invocations compile the offline companions. Build manifests report
 validation as not run; successful compilation does not qualify live behavior.
 
 Hashes detect accidental changes relative to the locally issued manifest; they
@@ -142,6 +146,48 @@ descendant coverage. The Job Object claim applies to newly launched Windows
 terminal CreateProcess descendants; WMI/service/broker-launched processes,
 existing hosts, chat app-server processes, and global CI/test concurrency remain
 outside it. Record fleet and ConPTY results separately.
+
+## Offline complete daemon lifecycle exercise
+
+From the same immutable release directory:
+
+~~~powershell
+pwsh -NoProfile -File .\Run-Offline-Daemon.ps1
+~~~
+
+This runner accepts **no arguments** and executes only the source-pinned
+ao-offline-daemon.exe test companion. Its linked TestMain selects the fixed
+parent, with a nonce-bound internal child selector. The companion invokes the
+same private Run composition used by AO.exe, with every external-effect factory
+explicitly replaced by a test-only synthetic implementation. The normal AO.exe
+has no fake-provider startup flag. The fixture rejects the older partial
+lifecycle shortcut so real startup, warmers and recovery remain in the test.
+
+The runner verifies the immutable bundle, creates a fresh
+C:\AO-MTechLabs-DaemonFixture-GUID directory, and protects only that newly
+created directory's DACL. It never adopts old state, changes ancestor or
+credential ACLs, reads native credentials, or elevates. The private root marker
+binds source, companion hash, owner SID and run ID. The child has a minimal
+environment, explicit private service roots and an ephemeral 127.0.0.1 listener;
+it never binds production port39421 or post-refresh port39431.
+
+The fixed test checks startup-constructor failure cleanup, two successful HTTP
+boots around an owned child crash, 40 registered synthetic sessions, retained
+queued work, uncertain dispatch/admission quarantine, exact durable report
+attachment once, dirty-file preservation, graceful listener/run-file shutdown
+and store reopening. Exactly two simulated provider-write callbacks are allowed.
+Every unconfigured external effect is refused and counted; any such attempt
+fails the fixture. Real SQLite, migrations, locks, CDC, HTTP, service wiring and
+queue/recovery code execute. Providers, native runtime, account, SCM, tracker,
+network-export and host-command leaves remain synthetic.
+
+The fixture preserves a report's attachment and acknowledgement, not a claim
+that a model processed it. The proof records actual starts, 40 registrations,
+two synthetic writes, zero forbidden effects and zero real provider calls.
+The runner rejects a skipped test or missing/source-mismatched proof even if
+the process exits zero. Results, the proof and their hashes are retained under
+the fresh fixture root's results directory. Keep this proof distinct from the
+actual AO.exe ConPTY helper proof and from real provider qualification.
 
 ## Post-refresh startup is a separate owner action
 
@@ -289,7 +335,7 @@ do not bypass them with a broad kill.
 ## Static verification and remaining qualification
 
 Test-CandidateScripts.ps1 parses PowerShell ASTs and reads the JSON template.
-It checks compile-only build commands, fixed fleet/ConPTY arguments and hash-derived
+It checks compile-only build commands, fixed fleet/ConPTY/daemon arguments and hash-derived
 fixture inputs, pre-launch
 gates, owned stop checks, and conservative policy structure. It never executes
 the start/stop scripts, AO, a provider, or an account endpoint.
@@ -297,13 +343,14 @@ the start/stop scripts, AO, a provider, or an account endpoint.
 Only static execution checks of these start/stop scripts are authorized in the
 exhausted-allowance phase. The final candidate's compiled offline companions are
 run separately after the final source commit. Fresh private-directory creation
-and DACL behavior, safe native-home metadata, fake daemon/ConPTY seams and
-complete descendant ownership are offline or host-engineering gates; they do
-not inherently require model allowance. Separate fixed-helper terminal evidence
+and DACL behavior, fake daemon/ConPTY seams and owned descendant cleanup have
+separate offline fixtures. Safe native-home metadata remains an independent host
+gate; it does not inherently require model allowance. Separate fixed-helper terminal evidence
 belongs in the repair bundle and must not be inferred from the fleet companion.
 
 Genuine account, model-catalog and allowance endpoints remain withheld under
 this run's provider non-execution boundary. Actual account bootstrap and this
-candidate's full daemon startup remain unverified. Provider interruption, native
+candidate's production-factory daemon startup remain unverified. The separate
+shared-Run fake composition qualifies only its explicit synthetic boundary. Provider interruption, native
 internal requests and the small real engineering canary require the later
 controlled native/model qualification after genuine allowance refresh.

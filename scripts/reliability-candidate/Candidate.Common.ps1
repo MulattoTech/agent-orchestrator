@@ -40,11 +40,13 @@ function Assert-CandidateBundle {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -AsHashtable
     if ($manifest.schemaVersion -ne 1 -or $manifest.sourceCommit -notmatch '^[0-9a-f]{40}$' -or
         $manifest.strictPolicy -ne $true -or $manifest.offlineCompanion.allowlistEnforced -ne $true -or
-        $manifest.offlineConPTY.allowlistEnforced -ne $true) {
+        $manifest.offlineConPTY.allowlistEnforced -ne $true -or
+        $manifest.offlineDaemon.allowlistEnforced -ne $true -or $manifest.unsigned -ne $true -or
+        $manifest.offlineDaemon.sourcePinned -cne $manifest.sourceCommit) {
         throw 'Candidate manifest is missing strict build identity.'
     }
-    foreach ($required in @('AO.exe', 'ao-offline-worker.exe', 'ao-offline-fleet.exe', 'ao-offline-conpty.exe', 'Candidate.Common.ps1',
-        'Run-Offline-Fleet.ps1', 'Run-Offline-ConPTY.ps1', 'Start-PostRefresh-Validation.ps1', 'Stop-Candidate.ps1', 'policy.template.json')) {
+    foreach ($required in @('AO.exe', 'ao-offline-worker.exe', 'ao-offline-fleet.exe', 'ao-offline-conpty.exe', 'ao-offline-daemon.exe', 'Candidate.Common.ps1',
+        'Run-Offline-Fleet.ps1', 'Run-Offline-ConPTY.ps1', 'Run-Offline-Daemon.ps1', 'Start-PostRefresh-Validation.ps1', 'Stop-Candidate.ps1', 'policy.template.json')) {
         if (-not $manifest.files.ContainsKey($required)) { throw "Missing candidate file record: $required" }
     }
     foreach ($name in $manifest.files.Keys) {
