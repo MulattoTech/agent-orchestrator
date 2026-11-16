@@ -1463,7 +1463,9 @@ function ChatWorkspaceContent({
 			if (newWorkDisabled || queueEditRef.current?.clientMessageId) return;
 			const message = queuedMessages.find((queued) => queued.turnId === turnId)?.message;
 			if (!message) return;
-			const parts = stagedAttachmentParts(text);
+			// Older daemons persisted the provider-only report suffix in text.
+			// Never seed the editable draft from that hidden delivery envelope.
+			const parts = stagedAttachmentParts(humanVisibleText(text));
 			// Paths and native blocks have no shared persisted identity.
 			const attachments: StoredComposerAttachment[] = parts.attachments.map((path) => ({
 				id: path, name: attachmentName(path), path,

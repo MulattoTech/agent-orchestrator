@@ -1112,7 +1112,7 @@ func nativeHistoryMessageText(message domain.ConversationMessage) string {
 	}
 	internal := make([]ports.ChatContent, 0, len(content))
 	for _, block := range content {
-		if block.Type == "file_reference" || block.Type == "excerpt" || (message.Continuation && block.Internal && block.Type == "text") {
+		if block.Type == "file_reference" || block.Type == "excerpt" || (block.Internal && block.Type == "text") {
 			internal = append(internal, block)
 		}
 	}
@@ -1820,10 +1820,6 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	if prompt.ProviderInputText != "" {
-		prompt.Text = prompt.ProviderInputText
-	}
-
 	now := c.now()
 	newTurnID := c.newID()
 	key := retryClientMessagePrefix + newTurnID
@@ -1861,13 +1857,36 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		return domain.ConversationTurn{}, ErrTurnNotRetryable
 	}
 
-	return c.dispatch(ctx, newTurnID, ports.ChatUserMessage{
+	delivery := ports.ChatUserMessage{
 		Text:            prompt.Text,
 		Continuation:    prompt.Continuation,
 		Content:         content,
 		Origin:          prompt.Origin,
 		ClientMessageID: key,
-	}, now, false, nil)
+	}
+	if prompt.ProviderInputText != "" {
+		// The frozen provider input already contains flattened server context.
+		// Keep authored text on the durable message and never append reports,
+		// continuation context or annotations a second time on retry.
+		delivery.Text = prompt.ProviderInputText
+		delivery.Content = unrenderedRetryContent(content)
+	}
+	return c.dispatch(ctx, newTurnID, delivery, now, false, nil)
+}
+
+// unrenderedRetryContent keeps native blocks that are not already represented
+// in RecordProviderInput. This mirrors excerptDeliveryMessage's flattening.
+func unrenderedRetryContent(content []ports.ChatContent) []ports.ChatContent {
+	out := make([]ports.ChatContent, 0, len(content))
+	for _, item := range content {
+		if item.Internal && item.Type == "text" ||
+			item.Type == "excerpt" && item.Excerpt != nil ||
+			item.Type == "file_reference" && item.FileReference != nil {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // retryPromptContent reconstructs provider-neutral durable prompt blocks and

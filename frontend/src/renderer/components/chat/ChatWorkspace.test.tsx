@@ -6852,6 +6852,24 @@ describe("durable queued edits", () => {
 		};
 	}
 
+
+	it("never copies legacy provider report context into an editable queued draft", async () => {
+		const snapshot = queuedSnapshot();
+		const message = snapshot.items[0] as ConversationMessage;
+		message.text = "queued text\n\n<ao-worker-reports>\nprivate worker report fixture\n</ao-worker-reports>";
+		const save = vi.fn().mockResolvedValue(undefined);
+		render(<ChatWorkspace snapshot={snapshot} onSend={vi.fn()} onEditQueuedTurn={save} />);
+		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("queued text");
+		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("private worker report fixture");
+		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit?.text).toBe("queued text");
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), " updated");
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(save).toHaveBeenCalledWith("queued", "queued text updated", {
+			clientMessageId: expect.any(String), expectedRevision: 0, retainedContent: [],
+		}));
+	});
+
 	it("keeps the sharing notice directly above the locked form and below the queue", () => {
 		render(<ChatWorkspace snapshot={queuedSnapshot()} onSend={vi.fn()} composerLockedPlaceholder="" composerNotice={<div data-composer-notice>Live draft stays visible</div>} />);
 		const notice = screen.getByText("Live draft stays visible");

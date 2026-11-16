@@ -301,7 +301,17 @@ const (
 	chatReportClose = "</ao-worker-reports>"
 )
 
+// ProviderContext is durable AO-owned context, never authored message text.
+// Keep the envelope only in the provider serialization for legacy transcript matching.
+func (b PreparedBatch) ProviderContext() string {
+	if len(b.Reports) == 0 {
+		return ""
+	}
+	return chatReportOpen + "\n" + b.Render() + "\n" + chatReportClose
+}
+
 // AppendToUserMessage places reports after the user's text in one semantic turn.
+// Deprecated: persist ProviderContext as internal content instead.
 // The envelope lets AO's Chat UI hide daemon-authored context while preserving
 // the exact prompt accepted by the provider for retry and recovery.
 func (b PreparedBatch) AppendToUserMessage(message string) string {
