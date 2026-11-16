@@ -181,3 +181,70 @@ func TestConflictingThreadOwnershipCannotBeReintroducedByThirdBinding(t *testing
 		t.Fatalf("%+v", s)
 	}
 }
+
+func TestObserverChargesPartialRecordsToSweepBudgetAndDoesNotStarveFinalFile(t *testing.T) {
+	dir := t.TempDir()
+	sink := &memorySink{}
+	var bindings []Binding
+	prefixLengths := map[string]int64{}
+	for i := 1; i <= 9; i++ {
+		id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
+		bindings = append(bindings, Binding{fmt.Sprintf("s%d", i), id})
+		prefix := record("session_meta", map[string]any{"id": id}) +
+			record("turn_context", map[string]any{"turn_id": "root", "model": "gpt-6-astra", "effort": "medium"})
+		path := filepath.Join(dir, "rollout-test-"+id+".jsonl")
+		prefixLengths[path] = int64(len(prefix))
+		// Eight writers have unfinished records; the ninth has one complete
+		// receipt. Charging only complete lines permits ~36MiB per sweep.
+		line := `{"type":"response_item","payload":"` + strings.Repeat("x", MaxLineBytes-1024)
+		if i == 9 {
+			line = record("token_usage_record", map[string]any{"thread_id": id, "turn_id": "root", "root_turn_id": "root", "response_id": "last-file",
+				"usage": map[string]any{"input_tokens": 100, "cached_input_tokens": 90, "output_tokens": 20, "reasoning_output_tokens": 5}, "ignored_padding": strings.Repeat("x", MaxLineBytes-1024)})
+		}
+		if err := os.WriteFile(path, []byte(prefix+line), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := NewObserver([]string{dir}, sink)
+	first := o.Sweep(t.Context(), bindings)
+	if first.BytesRead != 32<<20 || !first.PendingBytes || len(sink.receipts) != 0 {
+		t.Fatalf("physical read budget was not enforced: %+v receipts=%d", first, len(sink.receipts))
+	}
+	for path, cursor := range o.cursors {
+		if cursor.offset != prefixLengths[path] {
+			t.Fatalf("partial JSON advanced durable replay position: %s offset=%d want=%d", path, cursor.offset, prefixLengths[path])
+		}
+	}
+	second := o.Sweep(t.Context(), bindings)
+	if second.BytesRead > 32<<20 || len(sink.receipts) != 1 || sink.receipts["codex:response:last-file"].InputTokens != 100 {
+		t.Fatalf("unfinished files starved the final complete receipt: %+v receipts=%d", second, len(sink.receipts))
+	}
+}
+
+func TestObserverChargesMalformedAndOversizedReadsWithoutAdvancingCheckpoint(t *testing.T) {
+	for _, scenario := range []string{"malformed", "oversized"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := t.TempDir()
+			prefix := record("session_meta", map[string]any{"id": thread})
+			bad := "{not JSON}\n" + strings.Repeat("x", 128<<10)
+			minimumRead := int64(len(prefix) + len("{not JSON}\n"))
+			if scenario == "oversized" {
+				bad = strings.Repeat("x", MaxLineBytes+1) + "\n"
+				minimumRead = int64(len(prefix) + MaxLineBytes + 1)
+			}
+			path := filepath.Join(dir, "rollout-test-"+thread+".jsonl")
+			if err := os.WriteFile(path, []byte(prefix+bad), 0600); err != nil {
+				t.Fatal(err)
+			}
+			o := NewObserver([]string{dir}, &memorySink{})
+			status := SourceStatus{}
+			n, pending, err := o.read(t.Context(), path, Binding{"s", thread}, 8<<20, &status)
+			if err == nil || !pending || n < minimumRead || n > int64(len(prefix+bad)) {
+				t.Fatalf("failed record IO vanished from accounting: bytes=%d min=%d pending=%t err=%v", n, minimumRead, pending, err)
+			}
+			if o.cursors[path].offset != int64(len(prefix)) {
+				t.Fatal("failed record was consumed")
+			}
+		})
+	}
+}

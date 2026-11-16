@@ -140,6 +140,7 @@ func (o *Observer) Sweep(ctx context.Context, bindings []Binding) SourceStatus {
 	s.MatchedFiles = len(files)
 	budget := int64(32 << 20)
 	processed := 0
+	nextFile := o.next
 	for i := 0; i < len(files) && processed < 64 && budget > 0; i++ {
 		index := (o.next + i) % len(files)
 		f := files[index]
@@ -148,6 +149,12 @@ func (o *Observer) Sweep(ctx context.Context, bindings []Binding) SourceStatus {
 		s.BytesRead += n
 		s.PendingBytes = s.PendingBytes || pending
 		processed++
+		nextFile = (index + 1) % len(files)
+		if budget == 0 && pending {
+			// A partial final record may need a full per-file budget next sweep.
+			// Retrying from the first file can starve it behind unfinished files.
+			nextFile = index
+		}
 		if err != nil {
 			if errors.Is(err, ErrWrongThread) {
 				s.Errors = append(s.Errors, "native_thread_mismatch")
@@ -160,7 +167,7 @@ func (o *Observer) Sweep(ctx context.Context, bindings []Binding) SourceStatus {
 		}
 	}
 	if len(files) > 0 {
-		o.next = (o.next + processed) % len(files)
+		o.next = nextFile
 	}
 	if processed < len(files) {
 		s.PendingBytes = true
@@ -174,7 +181,21 @@ func (o *Observer) Sweep(ctx context.Context, bindings []Binding) SourceStatus {
 	result.Errors = append([]string(nil), s.Errors...)
 	return result
 }
-func (o *Observer) read(ctx context.Context, path string, b Binding, budget int64, s *SourceStatus) (int64, bool, error) {
+
+// countedReceiptReader measures physical reads independently from committed JSONL
+// offsets. Partial, oversized and malformed records still consume observation IO.
+type countedReceiptReader struct {
+	reader io.Reader
+	bytes  int64
+}
+
+func (r *countedReceiptReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.bytes += int64(n)
+	return n, err
+}
+
+func (o *Observer) read(ctx context.Context, path string, b Binding, budget int64, s *SourceStatus) (bytesRead int64, pending bool, resultErr error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, false, err
@@ -197,7 +218,9 @@ func (o *Observer) read(ctx context.Context, path string, b Binding, budget int6
 	if _, err = f.Seek(c.offset, io.SeekStart); err != nil {
 		return 0, false, err
 	}
-	r := bufio.NewReaderSize(io.LimitReader(f, budget), 64<<10)
+	counted := &countedReceiptReader{reader: io.LimitReader(f, budget)}
+	defer func() { bytesRead = counted.bytes }()
+	r := bufio.NewReaderSize(counted, 64<<10)
 	var read int64
 	for read < budget {
 		if err = ctx.Err(); err != nil {
