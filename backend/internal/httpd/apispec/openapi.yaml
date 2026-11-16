@@ -20524,6 +20524,19 @@ components:
       - turnId
       - deliveredWithTurnId
       type: object
+    DomainPRCompletionDependency:
+      properties:
+        headSha:
+          type: string
+        prUrl:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - prUrl
+      - headSha
+      type: object
     DomainReviewerConfig:
       properties:
         agentConfig:
@@ -25329,6 +25342,11 @@ components:
         accountId:
           maxLength: 128
           type: string
+        admissionDependencies:
+          items:
+            type: string
+          maxItems: 64
+          type: array
         approvalMode:
           enum:
           - default
@@ -25416,6 +25434,11 @@ components:
           type: string
         parentSessionId:
           type: string
+        prCompletionDependencies:
+          items:
+            $ref: '#/components/schemas/DomainPRCompletionDependency'
+          maxItems: 64
+          type: array
         projectId:
           type: string
         prompt:
