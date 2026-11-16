@@ -1821,6 +1821,15 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
+	if authored, legacyContext := splitLegacyWorkerReports(prompt.Text); legacyContext != "" {
+		prompt.Text = authored
+		content = retainLegacyWorkerReports(content, legacyContext)
+		encoded, err := json.Marshal(content)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		prompt.DeliveryContentJSON = string(encoded)
+	}
 	now := c.now()
 	newTurnID := c.newID()
 	key := retryClientMessagePrefix + newTurnID
