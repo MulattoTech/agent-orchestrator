@@ -1951,7 +1951,23 @@ func toAPIError(err error) error {
 func mapSessionError(err error) error {
 	var relaunchErr *sessionmanager.RelaunchError
 	var cleanupRefused *sessionmanager.CleanupRefusedError
+	var queued *sessionmanager.SessionQueuedError
+	if errors.As(err, &queued) {
+		return apierr.Conflict("SESSION_CAPACITY_QUEUED", "This command is safely queued until capacity and dependencies permit",
+			map[string]any{"admissionRequestId": queued.RequestID})
+	}
 	switch {
+	case errors.Is(err, sessionmanager.ErrPRCompletionPending):
+		return apierr.Conflict("PR_COMPLETION_PENDING", "Exact merged PR dependencies must be satisfied; enable the durable admission queue to defer this command", nil)
+	case errors.Is(err, sessionmanager.ErrWorkerCapacity):
+		return apierr.Conflict("SESSION_CAPACITY_REACHED", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrOrchestratorOccupied):
+		return apierr.Conflict("PROJECT_COORDINATOR_OCCUPIED", "This project already has an active or reserved coordinator", nil)
+	case errors.Is(err, sessionmanager.ErrWorkspaceOwned):
+		return apierr.Conflict("WORKSPACE_WRITE_OWNER_CONFLICT", "Another live session owns this workspace", nil)
+	case errors.Is(err, sessionmanager.ErrWorkspaceOwnershipUnknown):
+		return apierr.Conflict("WORKSPACE_OWNERSHIP_UNKNOWN", "Workspace ownership could not be verified; no worker was started", nil)
+
 	case err == nil:
 		return nil
 	case errors.Is(err, sessionmanager.ErrNotFound):
