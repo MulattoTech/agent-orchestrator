@@ -507,3 +507,30 @@ func TestBoundedAccountInterruptFanoutAndDetach(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSessionCannotBypassUncertainLeaseWithFreshRequestID(t *testing.T) {
+	p := testPolicy()
+	now := time.Now()
+	g := openFake(t, &p, &now)
+	ctx := context.Background()
+	first := request(t, g, "first", "project", "implementation", "sol", "medium")
+	first.Session = "same-session"
+	if err := g.Dispatch(ctx, first, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	second := request(t, g, "second", "project", "implementation", "sol", "medium")
+	second.Session = first.Session
+	if err := g.Dispatch(ctx, second, func() error { t.Fatal("concurrent same-session dispatch"); return nil }); !errors.Is(err, ErrCapacity) {
+		t.Fatal(err)
+	}
+	if err := g.MarkUncertain(ctx, first.ID, "synthetic lost acknowledgement"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Dispatch(ctx, second, func() error { t.Fatal("uncertain lease bypassed by new id"); return nil }); !errors.Is(err, ErrCapacity) {
+		t.Fatal(err)
+	}
+	s, err := g.Snapshot(ctx)
+	if err != nil || s.Uncertain != 1 || s.Queued != 1 || s.BudgetUsed != 1 {
+		t.Fatalf("%+v %v", s, err)
+	}
+}

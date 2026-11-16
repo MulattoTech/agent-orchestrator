@@ -302,17 +302,17 @@ func (g *Gate) Dispatch(ctx context.Context, r Request, write func() error) erro
 	if status == "EXHAUSTED" {
 		return refusal(deny(ErrQuota, "global provider/account lockout; reset time alone does not authorize retries"))
 	}
-	var spent, active, projectActive, reviews int
+	var spent, active, projectActive, reviews, sessionActive int
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM attempts WHERE epoch=? AND dispatched_at<>''", p.AuthorizationEpoch).Scan(&spent); err != nil {
 		return err
 	}
 	if spent >= p.TurnBudget-p.ReserveTurns {
 		return refusal(deny(ErrQuota, "conservative turn budget reached; real remaining quota is UNKNOWN"))
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(CASE WHEN project_id=? THEN 1 ELSE 0 END),0),coalesce(sum(CASE WHEN role='reviewer' THEN 1 ELSE 0 END),0) FROM attempts WHERE state IN ('active','uncertain')`, r.Project).Scan(&active, &projectActive, &reviews); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(CASE WHEN project_id=? THEN 1 ELSE 0 END),0),coalesce(sum(CASE WHEN role='reviewer' THEN 1 ELSE 0 END),0),coalesce(sum(CASE WHEN session_id=? THEN 1 ELSE 0 END),0) FROM attempts WHERE state IN ('active','uncertain')`, r.Project, r.Session).Scan(&active, &projectActive, &reviews, &sessionActive); err != nil {
 		return err
 	}
-	if active >= p.MaximumInference || projectActive >= p.MaximumPerProject || (selected.Role == "reviewer" && reviews >= p.MaximumReviewers) {
+	if sessionActive > 0 || active >= p.MaximumInference || projectActive >= p.MaximumPerProject || (selected.Role == "reviewer" && reviews >= p.MaximumReviewers) {
 		return refusal(deny(ErrCapacity, "inference capacity occupied; session slots are independent"))
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE attempts SET state='active',dispatched_at=?,epoch=?,exception_id=? WHERE id=? AND state='queued'", now, p.AuthorizationEpoch, selected.ExceptionID, r.ID); err != nil {
