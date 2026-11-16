@@ -1957,6 +1957,8 @@ func mapSessionError(err error) error {
 			map[string]any{"admissionRequestId": queued.RequestID})
 	}
 	switch {
+	case errors.Is(err, sessionmanager.ErrPRCompletionPending):
+		return apierr.Conflict("PR_COMPLETION_PENDING", "Exact merged PR dependencies must be satisfied; enable the durable admission queue to defer this command", nil)
 	case errors.Is(err, sessionmanager.ErrWorkerCapacity):
 		return apierr.Conflict("SESSION_CAPACITY_REACHED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrOrchestratorOccupied):

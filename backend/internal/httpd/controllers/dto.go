@@ -674,7 +674,12 @@ type SessionArchiveSummary struct {
 
 // SpawnSessionRequest is the body of POST /api/v1/sessions.
 type SpawnSessionRequest struct {
-	ClientRequestID string `json:"clientRequestId,omitempty" maxLength:"128"`
+	// AdmissionDependencies wait for existing durable provisioning commands.
+	AdmissionDependencies []string `json:"admissionDependencies,omitempty" maxItems:"64"`
+	// PRCompletionDependencies wait for exact provider-observed merged PR heads.
+	// A merged PR alone does not establish requirements acceptance.
+	PRCompletionDependencies []domain.PRCompletionDependency `json:"prCompletionDependencies,omitempty" maxItems:"64"`
+	ClientRequestID          string                          `json:"clientRequestId,omitempty" maxLength:"128"`
 	// ProjectID is omitted for a standalone worker session.
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
 	IssueID   domain.IssueID   `json:"issueId,omitempty"`

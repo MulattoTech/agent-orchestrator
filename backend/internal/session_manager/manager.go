@@ -1098,6 +1098,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 	}
+	if err := domain.ValidatePRCompletionDependencies(cfg.PRCompletionDependencies); err != nil {
+		return domain.SessionRecord{}, 0, 0, err
+	}
+	if len(cfg.PRCompletionDependencies) > 0 {
+		if ctx.Value(admissionQueueContextKey{}) == nil {
+			return domain.SessionRecord{}, 0, 0, m.queueSpawnAdmission(ctx, cfg, ErrPRCompletionPending)
+		}
+		if err := m.prCompletionDependenciesReady(ctx, cfg.PRCompletionDependencies); err != nil {
+			return domain.SessionRecord{}, 0, 0, err
+		}
+	}
 	if len(cfg.AdmissionDependencies) > 0 && ctx.Value(admissionQueueContextKey{}) == nil {
 		return domain.SessionRecord{}, 0, 0, m.queueSpawnAdmission(ctx, cfg, ErrAdmissionDependencyPending)
 	}

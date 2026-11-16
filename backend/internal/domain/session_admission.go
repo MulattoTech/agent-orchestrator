@@ -32,6 +32,8 @@ type SessionAdmissionRequest struct {
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 	AvailableAt time.Time `json:"availableAt"`
+	// Public waiting criteria are projected from the private immutable payload.
+	PRCompletionDependencies []PRCompletionDependency `json:"prCompletionDependencies,omitempty"`
 }
 
 type SessionAdmissionSnapshot struct {

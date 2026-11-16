@@ -131,3 +131,37 @@ A future directory beneath an alias is fenced by its existing ancestor identity
 plus relative suffix. Unreadable, cyclic or dangling alias identity refuses
 admission with WORKSPACE_OWNERSHIP_UNKNOWN. Restore checks ownership before
 workspace mutation as well as immediately before controller launch.
+
+## Explicit PR completion dependencies
+
+POST /api/v1/sessions accepts two separate optional dependency lists:
+
+- admissionDependencies names existing durable provisioning commands. Completion
+  means their spawn or restore command committed; it says nothing about the work.
+- prCompletionDependencies names an exact sessionId, canonical prUrl and full
+  expected headSha. This is a PR completion dependency, not requirements acceptance.
+
+A PR-dependent command is always durably queued before worker admission. The
+queue reads the existing SCM observation store; it performs no GitHub request or
+model turn. It requires the exact session, canonical URL and head SHA, Merged=true,
+a full MergeCommitSHA, a provider merge timestamp, and provider/host/repository/
+provider-ID provenance. ObservedAt must be within 15 minutes, with one minute of
+clock-skew tolerance. Missing, mismatched, non-merged or stale facts keep the
+command queued as PR_COMPLETION_PENDING with zero failure-attempt consumption.
+Ten-second readiness checks do not block other projects' eligible commands.
+An SCM refresh can release the immutable command once the required proof exists.
+The queue status includes its explicit PR criteria but keeps its payload private.
+
+A completed PR-dependent spawn replays through the same durable client request
+identity after restart; another queue tick or repeated request does not launch a
+second worker. Idle, archive, comments, review prose and task status never imply
+that a PR dependency succeeded. Queue-disabled requests refuse instead of
+bypassing the dependency. A provider observation is an input to this gate; this
+feature does not itself refresh stale observations or approve a merge.
+
+Offline tests use synthetic provider facts committed through the real SCM store,
+including SQLite close/reopen, 18 incomplete-observation cases, independent-project
+fairness, and one dispatch after an exact merged fact. Owner-approved artifact
+acceptance and full requirements DAGs still require a separate authoritative
+outcome interface. Global CI/test/tool subprocess semaphores are not implemented
+by worker admission or the inference gate.

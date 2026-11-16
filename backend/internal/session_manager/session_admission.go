@@ -227,7 +227,7 @@ type sessionAdmissionStore interface {
 }
 
 func (m *Manager) queueSpawnAdmission(ctx context.Context, cfg ports.SpawnConfig, cause error) error {
-	if (!errors.Is(cause, ErrWorkerCapacity) && !errors.Is(cause, ErrAdmissionDependencyPending)) || ctx.Value(admissionQueueContextKey{}) != nil {
+	if (!errors.Is(cause, ErrWorkerCapacity) && !errors.Is(cause, ErrAdmissionDependencyPending) && !errors.Is(cause, ErrPRCompletionPending)) || ctx.Value(admissionQueueContextKey{}) != nil {
 		return cause
 	}
 	m.admission.mu.Lock()
@@ -322,7 +322,19 @@ func (m *Manager) ListAdmissionQueue(ctx context.Context) ([]domain.SessionAdmis
 	if !ok {
 		return nil, nil
 	}
-	return store.ListSessionAdmission(ctx)
+	requests, err := store.ListSessionAdmission(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range requests {
+		if requests[i].Operation == "spawn" {
+			var cfg ports.SpawnConfig
+			if json.Unmarshal([]byte(requests[i].Payload), &cfg) == nil {
+				requests[i].PRCompletionDependencies = cfg.PRCompletionDependencies
+			}
+		}
+	}
+	return requests, nil
 }
 
 func (m *Manager) CancelAdmissionRequest(ctx context.Context, id string) (bool, error) {
@@ -495,6 +507,10 @@ func (m *Manager) DispatchAdmissionQueue(ctx context.Context, maxClaims int) err
 			request.State = "completed"
 			request.SessionID = session.ID
 			request.FailureCode = ""
+		case errors.Is(err, ErrPRCompletionPending):
+			request.State = "queued"
+			request.FailureCode = "PR_COMPLETION_PENDING"
+			request.AvailableAt = now.Add(10 * time.Second)
 		case errors.Is(err, ErrAdmissionDependencyPending):
 			request.State = "queued"
 			request.FailureCode = "ADMISSION_DEPENDENCY_PENDING"

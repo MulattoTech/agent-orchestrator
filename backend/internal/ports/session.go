@@ -21,8 +21,11 @@ type SpawnConfig struct {
 	// AdmissionDependencies are durable admission request IDs that must finish
 	// before this command may launch. Unknown or cyclic dependencies are refused.
 	AdmissionDependencies []string
-	ProjectID             domain.ProjectID
-	IssueID               domain.IssueID
+	// PRCompletionDependencies require exact provider-observed merged PR heads.
+	// They are independent of provisioning dependencies and requirements acceptance.
+	PRCompletionDependencies []domain.PRCompletionDependency
+	ProjectID                domain.ProjectID
+	IssueID                  domain.IssueID
 	// AutomationRunID makes one scheduled occurrence idempotent across daemon
 	// restarts. Ordinary interactive spawns leave this unset.
 	AutomationRunID *domain.AutomationRunID
