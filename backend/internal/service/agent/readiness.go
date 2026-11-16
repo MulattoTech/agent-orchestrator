@@ -120,11 +120,11 @@ func (s *Service) InvalidateAgentAuthentication(agentID string) {
 
 // RecheckAgent schedules a non-blocking display readiness ensure.
 func (s *Service) RecheckAgent(agentID string) {
-	go func() {
+	s.background.Go(func() {
 		if _, err := s.readiness.Ensure(s.readiness.ctx, []string{agentID}, domain.AgentReadinessPurposeDisplay); err != nil {
 			s.logger.Warn("agent readiness recheck failed", "agent", agentID, "err", err)
 		}
-	}()
+	})
 }
 
 // WarmReadiness starts the coordinator's bounded asynchronous warm-up and
@@ -136,11 +136,11 @@ func (s *Service) WarmReadiness() <-chan struct{} {
 		return done
 	}
 	out := make(chan struct{})
-	go func() {
+	s.background.Go(func() {
 		<-done
 		s.readinessWarmOnce.Do(func() { close(s.readinessWarm) })
 		close(out)
-	}()
+	})
 	return out
 }
 

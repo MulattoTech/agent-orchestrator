@@ -71,8 +71,9 @@ type modelCatalogCall struct {
 // Service owns normalized harness readiness and the unchanged model catalog.
 // Consumers share coordinator checks instead of probing adapters directly.
 type Service struct {
-	agents    []agentregistry.HarnessAgent
-	readiness *readinessCoordinator
+	background *backgroundWork
+	agents     []agentregistry.HarnessAgent
+	readiness  *readinessCoordinator
 	// savedDefaultSignIn reports the sign-in of the saved account new sessions
 	// of a harness start on; handled is false when they start on this computer.
 	savedDefaultSignIn func(ctx context.Context, harness domain.AgentHarness) (domain.AgentAccountIdentityCheck, bool)
@@ -168,6 +169,7 @@ func newWithHarnessFactory(deps Deps, agents []agentregistry.HarnessAgent, facto
 	}
 	if deps.CodexAccountRoot != "" && deps.CodexGlobalHome != "" {
 		svc.codexAccounts = newCodexAccountManager(deps.Context, deps.CodexAccountRoot, deps.CodexPendingRoot, deps.CodexSwitchStagingRoot, deps.CodexGlobalHome, deps.CodexAccounts, deps.Logger, deps.CodexOperationGate)
+		svc.codexAccounts.background = svc.background
 		svc.codexAccounts.resolveBinary = func(ctx context.Context) (string, error) {
 			return svc.ResolveAgentBinary(ctx, string(domain.HarnessCodex))
 		}
@@ -177,6 +179,7 @@ func newWithHarnessFactory(deps Deps, agents []agentregistry.HarnessAgent, facto
 	}
 	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
 		Agents: agents, Factory: factory, Context: deps.Context, Logger: deps.Logger,
+		Background:          svc.background,
 		DataDir:             deps.DataDir,
 		AuthenticationCheck: svc.authenticationWithAccount,
 		// A catalog built while the agent was signed out carries that failure
@@ -209,7 +212,7 @@ func newWithHarnessFactory(deps Deps, agents []agentregistry.HarnessAgent, facto
 // It is used by focused tests.
 func NewWithAgents(agents []agentregistry.HarnessAgent) *Service {
 	svc := newService(agents, nil, nil)
-	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents})
+	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents, Background: svc.background})
 	return svc
 }
 
@@ -218,7 +221,8 @@ func newService(agents []agentregistry.HarnessAgent, cache ports.AgentModelCatal
 	for _, item := range agents {
 		resolverMu[string(item.Harness)] = &sync.Mutex{}
 	}
-	return &Service{agents: agents, readiness: newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents}), cache: cache, discoverer: discoverer, resolverMu: resolverMu, modelCalls: map[string]*modelCatalogCall{}, modelGeneration: map[string]int64{}, discoverySlots: make(chan struct{}, 2), ctx: context.Background(), now: time.Now, logger: slog.Default(), usesCustomCodexModelProvider: codexagent.UsesCustomModelProvider}
+	background := &backgroundWork{}
+	return &Service{background: background, agents: agents, readiness: newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents, Background: background}), cache: cache, discoverer: discoverer, resolverMu: resolverMu, modelCalls: map[string]*modelCatalogCall{}, modelGeneration: map[string]int64{}, discoverySlots: make(chan struct{}, 2), ctx: context.Background(), now: time.Now, logger: slog.Default(), usesCustomCodexModelProvider: codexagent.UsesCustomModelProvider}
 }
 
 // WarmModelCatalogs starts the bounded cache scheduler. Readiness is never held
@@ -227,10 +231,10 @@ func (s *Service) WarmModelCatalogs(ctx context.Context) {
 	if s.cache == nil || s.discoverer == nil {
 		return
 	}
-	go func() {
+	s.background.Go(func() {
 		s.prefetchModelCatalogs(ctx, false)
 		s.monitorModelCatalogFreshness(ctx)
-	}()
+	})
 }
 
 func (s *Service) prefetchModelCatalogs(ctx context.Context, force bool) {
@@ -309,7 +313,7 @@ func (s *Service) prefetchModelCatalogs(ctx context.Context, force bool) {
 	var workers sync.WaitGroup
 	for range cap(s.discoverySlots) {
 		workers.Add(1)
-		go func() {
+		s.background.Go(func() {
 			defer workers.Done()
 			for record := range jobs {
 				if ctx.Err() != nil {
@@ -317,7 +321,7 @@ func (s *Service) prefetchModelCatalogs(ctx context.Context, force bool) {
 				}
 				_, _ = s.revalidateModels(ctx, record.AgentID, record.ProjectID)
 			}
-		}()
+		})
 	}
 	workers.Wait()
 }
@@ -403,11 +407,11 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 			retriesExhausted := modelCatalogRetriesExhausted(cached)
 			cached.Catalog.RefreshRecommended = !retriesExhausted && (due || needsRecovery || cached.RefreshState == "error" || cached.RefreshState == "queued")
 			if !retriesExhausted && (due || needsRecovery) && (cached.RetryAt.IsZero() || !s.now().Before(cached.RetryAt)) {
-				go func() { _, _ = s.revalidateModels(s.ctx, agentID, projectID) }()
+				s.background.Go(func() { _, _ = s.revalidateModels(s.ctx, agentID, projectID) })
 			} else if retriesExhausted {
-				go s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
+				s.background.Go(func() { s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion) })
 			} else if !due && agentID != "claude-code" {
-				time.AfterFunc(10*time.Millisecond, func() {
+				s.background.After(s.ctx, 10*time.Millisecond, func() {
 					s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
 				})
 			}
@@ -475,10 +479,10 @@ func (s *Service) firstModelCatalog(ctx context.Context, agentID, scope string) 
 		err     error
 	}
 	done := make(chan result, 1)
-	go func() {
+	s.background.Go(func() {
 		catalog, err := s.coalesceModelLoad(s.ctx, agentID, scope, modelLoadCached)
 		done <- result{catalog: catalog, err: err}
-	}()
+	})
 	timer := time.NewTimer(modelCatalogFirstLoadWait)
 	defer timer.Stop()
 	select {
@@ -525,7 +529,7 @@ func (s *Service) checkCatalogInputsInBackground(agentID, projectID, fingerprint
 	}
 	s.inputChecks[key] = catalogInputCheck{running: true}
 	s.inputCheckMu.Unlock()
-	go func() {
+	s.background.Go(func() {
 		current := fingerprint
 		if s.ctx.Err() == nil && s.modelCatalogInputsChanged(s.ctx, agentID, projectID, fingerprint) {
 			_, _ = s.revalidateModels(s.ctx, agentID, projectID)
@@ -536,7 +540,7 @@ func (s *Service) checkCatalogInputsInBackground(agentID, projectID, fingerprint
 		s.inputCheckMu.Lock()
 		s.inputChecks[key] = catalogInputCheck{checkedAt: s.now(), fingerprint: current}
 		s.inputCheckMu.Unlock()
-	}()
+	})
 	return true
 }
 
@@ -686,7 +690,7 @@ func (s *Service) InvalidateModelCatalogs(agentID string) {
 	if s.cache == nil {
 		return
 	}
-	go func() {
+	s.background.Go(func() {
 		records, err := s.cache.ListAgentModelCatalogsByAgent(s.ctx, agentID)
 		if err != nil {
 			return
@@ -704,7 +708,7 @@ func (s *Service) InvalidateModelCatalogs(agentID string) {
 			}
 			_, _ = s.revalidateModels(s.ctx, agentID, record.ProjectID)
 		}
-	}()
+	})
 }
 
 // requeueCatalog marks a cached scope due and drops its retry backoff, so the
@@ -763,7 +767,7 @@ func (s *Service) coalesceModelLoad(
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
-	go func() {
+	s.background.Go(func() {
 		// Wait for readiness before taking a discovery slot or starting the
 		// discovery timeout, so a slow startup neither holds slots nor eats into
 		// the discovery's own budget. An explicit refresh also wakes an existing
@@ -792,7 +796,7 @@ func (s *Service) coalesceModelLoad(
 		delete(s.modelCalls, key)
 		close(call.done)
 		s.modelCallMu.Unlock()
-	}()
+	})
 
 	select {
 	case <-call.done:
@@ -1167,7 +1171,7 @@ func (s *Service) saveFailedCatalog(ctx context.Context, previous decodedCatalog
 	}
 	if catalog.RetryAt != nil && s.cache != nil {
 		retryAt := *catalog.RetryAt
-		time.AfterFunc(retryDelay, func() {
+		s.background.After(s.ctx, retryDelay, func() {
 			if s.ctx.Err() != nil {
 				return
 			}

@@ -107,8 +107,8 @@ func (m *codexAccountManager) openLoginTerminal(ctx context.Context, targetAccou
 	m.login.pendingDir, m.login.home, m.login.terminalHandle = pendingDir, home, terminal.HandleID
 	m.login.terminalTitle, m.login.terminalCreated = terminal.Title, terminal.CreatedAt
 	m.mu.Unlock()
-	go m.expireLogin(m.ctx, id, snapshot.ExpiresAt)
-	go m.monitorLoginTerminal(m.ctx, id, terminal.HandleID)
+	m.background.Go(func() { m.expireLogin(m.ctx, id, snapshot.ExpiresAt) })
+	m.background.Go(func() { m.monitorLoginTerminal(m.ctx, id, terminal.HandleID) })
 	m.publish()
 	return CodexAccountLoginTerminalStart{Operation: snapshot, ShellTerminal: terminal}, nil
 }
@@ -381,7 +381,7 @@ func (m *codexAccountManager) finishLogin(id string, status domain.CodexAccountL
 		m.login.snapshot.AccountID = account.ID
 	}
 	result := m.login.snapshot
-	go m.publish()
+	m.background.Go(func() { m.publish() })
 	return result
 }
 

@@ -45,6 +45,7 @@ const (
 )
 
 type readinessCoordinatorConfig struct {
+	Background          *backgroundWork
 	DataDir             string
 	Agents              []agentregistry.HarnessAgent
 	Factory             func() []agentregistry.HarnessAgent
@@ -90,6 +91,7 @@ type readinessCallKey struct {
 }
 
 type readinessCoordinator struct {
+	background          *backgroundWork
 	dataDir             string
 	ctx                 context.Context
 	factory             func() []agentregistry.HarnessAgent
@@ -149,9 +151,13 @@ func newReadinessCoordinator(cfg readinessCoordinatorConfig) *readinessCoordinat
 			return append([]agentregistry.HarnessAgent(nil), stable...)
 		}
 	}
+	if cfg.Background == nil {
+		cfg.Background = &backgroundWork{}
+	}
 	c := &readinessCoordinator{
-		dataDir: cfg.DataDir,
-		ctx:     cfg.Context, factory: cfg.Factory, logger: cfg.Logger, now: cfg.Now,
+		background: cfg.Background,
+		dataDir:    cfg.DataDir,
+		ctx:        cfg.Context, factory: cfg.Factory, logger: cfg.Logger, now: cfg.Now,
 		displayTTL: cfg.DisplayTTL, launchTTL: cfg.LaunchTTL,
 		installTimeout: cfg.InstallTimeout, authTimeout: cfg.AuthTimeout,
 		retryDelays: cfg.RetryDelays, workers: cfg.Workers,
@@ -238,23 +244,25 @@ func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain
 	var wg sync.WaitGroup
 	wg.Add(len(ids))
 	for _, id := range ids {
-		go func(id string) {
-			defer wg.Done()
-			snapshot, ensureErr := c.ensureOne(waitCtx, id, purpose, readinessInvalidateInstallation, true)
-			if ensureErr != nil || snapshot.Installation.State != domain.AgentInstallationInstalled {
-				return
-			}
-			select {
-			case matches <- snapshot:
-				cancel()
-			case <-waitCtx.Done():
-			}
-		}(id)
+		c.background.Go(func() {
+			func(id string) {
+				defer wg.Done()
+				snapshot, ensureErr := c.ensureOne(waitCtx, id, purpose, readinessInvalidateInstallation, true)
+				if ensureErr != nil || snapshot.Installation.State != domain.AgentInstallationInstalled {
+					return
+				}
+				select {
+				case matches <- snapshot:
+					cancel()
+				case <-waitCtx.Done():
+				}
+			}(id)
+		})
 	}
-	go func() {
+	c.background.Go(func() {
 		wg.Wait()
 		close(done)
-	}()
+	})
 	select {
 	case snapshot := <-matches:
 		return snapshot, true
@@ -293,17 +301,19 @@ func (c *readinessCoordinator) ensureMode(ctx context.Context, agentIDs []string
 	results := make(chan result, len(ids))
 	semaphore := make(chan struct{}, c.workers)
 	for index, id := range ids {
-		go func(index int, id string) {
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
-			case <-ctx.Done():
-				results <- result{index: index, err: ctx.Err()}
-				return
-			}
-			item, err := c.ensureOne(ctx, id, purpose, requested, presenceOnly)
-			results <- result{index: index, item: item, err: err}
-		}(index, id)
+		c.background.Go(func() {
+			func(index int, id string) {
+				select {
+				case semaphore <- struct{}{}:
+					defer func() { <-semaphore }()
+				case <-ctx.Done():
+					results <- result{index: index, err: ctx.Err()}
+					return
+				}
+				item, err := c.ensureOne(ctx, id, purpose, requested, presenceOnly)
+				results <- result{index: index, item: item, err: err}
+			}(index, id)
+		})
 	}
 	out := make([]domain.AgentReadinessSnapshot, len(ids))
 	for range ids {
@@ -403,7 +413,9 @@ func (c *readinessCoordinator) ensureOne(ctx context.Context, id string, purpose
 	entry.checking = needed
 	started := c.now()
 	c.mu.Unlock()
-	go c.runCheck(id, purpose, needed, presenceOnly, requested&readinessInvalidateAuthentication != 0, call, started)
+	c.background.Go(func() {
+		c.runCheck(id, purpose, needed, presenceOnly, requested&readinessInvalidateAuthentication != 0, call, started)
+	})
 
 	select {
 	case <-call.done:
@@ -523,7 +535,7 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 		} else {
 			failureCode = entry.snapshot.Authentication.ReasonCode
 		}
-		go c.scheduleRetry(id, generation, delay)
+		c.background.Go(func() { c.scheduleRetry(id, generation, delay) })
 	} else {
 		entry.failures = 0
 		entry.nextRetryAt = time.Time{}
@@ -537,7 +549,7 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 	c.mu.Unlock()
 	c.logDecision(id, purpose, "new_check", duration, snapshot, failureCode, nextRetry)
 	if recovered && c.onAuthRecovered != nil {
-		go c.onAuthRecovered(id)
+		c.background.Go(func() { c.onAuthRecovered(id) })
 	}
 }
 
@@ -708,7 +720,7 @@ func (c *readinessCoordinator) Invalidate(agentID string, invalidation readiness
 
 func (c *readinessCoordinator) Warm() <-chan struct{} {
 	done := make(chan struct{})
-	go func() {
+	c.background.Go(func() {
 		defer close(done)
 		// Warm installation through the process-free capability first. Goose's
 		// normal resolver validates identity by running --help, so startup must
@@ -720,7 +732,7 @@ func (c *readinessCoordinator) Warm() <-chan struct{} {
 		// resolve installation again. An identity-pending installation yields an
 		// inconclusive auth observation until an explicit normal refresh.
 		_, _ = c.ensureMode(c.ctx, nil, domain.AgentReadinessPurposeDisplay, readinessInvalidateAuthentication, false)
-	}()
+	})
 	return done
 }
 
