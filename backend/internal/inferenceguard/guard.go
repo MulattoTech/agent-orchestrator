@@ -636,7 +636,7 @@ func (g *Gate) Snapshot(ctx context.Context) (Snapshot, error) {
 	rows, err := g.db.QueryContext(ctx, `WITH classes AS (SELECT model,effort FROM attempts WHERE dispatched_at<>'' UNION SELECT model,effort FROM usage_receipts)
  SELECT classes.model,classes.effort,
  (SELECT count(*) FROM attempts a WHERE a.model=classes.model AND a.effort=classes.effort AND dispatched_at<>''),
- (SELECT count(*) FROM attempts a WHERE a.model=classes.model AND a.effort=classes.effort AND dispatched_at<>'' AND error_class<>'')
+ (SELECT count(*) FROM attempts a WHERE a.model=classes.model AND a.effort=classes.effort AND dispatched_at<>'' AND state='completed' AND error_class<>'')
  FROM classes ORDER BY classes.model,classes.effort`)
 	if err != nil {
 		return s, err
