@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 )
@@ -60,6 +61,7 @@ type Service struct {
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader
 	sessions               SessionReader
+	fileSnapshotCapture    filesnapshot.CaptureFunc
 	drivers                ports.ChatDriverRegistry
 	activity               ActivityRecorder
 	log                    *slog.Logger
@@ -173,6 +175,9 @@ type Options struct {
 	PageReader SnapshotPageReader
 	Sessions   SessionReader
 	Drivers    ports.ChatDriverRegistry
+	// FileSnapshotCapture supplies the Git snapshot effect. Nil selects the
+	// production implementation; isolated boot must supply it explicitly.
+	FileSnapshotCapture filesnapshot.CaptureFunc
 	// Activity feeds derived session status from turn events. Nil leaves a chat
 	// session reading as idle while it works, so production always wires it.
 	Activity ActivityRecorder
@@ -226,11 +231,16 @@ func New(opts Options) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	capture := opts.FileSnapshotCapture
+	if capture == nil {
+		capture = filesnapshot.Capture
+	}
 	svc := &Service{
 		store:                  opts.Store,
 		reader:                 opts.Reader,
 		pageReader:             opts.PageReader,
 		sessions:               opts.Sessions,
+		fileSnapshotCapture:    capture,
 		drivers:                opts.Drivers,
 		activity:               opts.Activity,
 		log:                    log,
@@ -1084,7 +1094,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, cfg.WorkspacePath, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, cfg.WorkspacePath, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader, s.sessionFileSnapshotCapture(cfg.SessionID))
 	if owner.Kind != domain.ConversationOwnerReview {
 		controller.artifactDir = s.sessionArtifactDir(ctx, cfg.SessionID)
 	}

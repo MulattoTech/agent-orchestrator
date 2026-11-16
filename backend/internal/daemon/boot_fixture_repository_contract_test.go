@@ -192,3 +192,17 @@ func TestBootFixtureForkSeedRecoveryRetainsBothRealAlgorithms(t *testing.T) {
 		t.Fatalf("unexpected denied effects: %+v", effects.denied)
 	}
 }
+
+func TestBootFixtureFileSnapshotHasNoExecutableFallback(t *testing.T) {
+	t.Setenv("PATH", "")
+	effects := newRepositoryFixtureContractEffects()
+	capture := fixtureFileSnapshotCapture(effects)
+	if err := capture(context.Background(), t.TempDir(), "refs/ao/synthetic"); err == nil {
+		t.Fatal("unexpected Git snapshot effect was accepted")
+	}
+	effects.mu.Lock()
+	defer effects.mu.Unlock()
+	if effects.denied["git.file-snapshot"] != 1 {
+		t.Fatalf("snapshot denials = %v", effects.denied)
+	}
+}

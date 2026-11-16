@@ -220,7 +220,8 @@ type Controller struct {
 	harness      domain.AgentHarness
 	// workspacePath is the worktree whose files are snapshotted before each turn
 	// and restored by a rollback.
-	workspacePath string
+	workspacePath       string
+	fileSnapshotCapture filesnapshot.CaptureFunc
 
 	conv                   ports.ChatConversation
 	store                  Store
@@ -414,6 +415,7 @@ func newController(
 	prChanged func(domain.SessionID),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
+	capture filesnapshot.CaptureFunc,
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
@@ -422,6 +424,7 @@ func newController(
 		generation:             generation,
 		harness:                harness,
 		workspacePath:          workspacePath,
+		fileSnapshotCapture:    capture,
 		conv:                   conv,
 		store:                  store,
 		continuationReader:     reader,

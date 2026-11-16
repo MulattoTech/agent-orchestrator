@@ -10,6 +10,7 @@ import (
 	workspacerouter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/router"
 	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
@@ -52,4 +53,8 @@ func productionBranchStateGit() sessionsvc.BranchStateGit {
 
 func productionSCMRepositoryDiscovery() scmobserve.RepositoryDiscovery {
 	return scmobserve.NewRepositoryDiscovery()
+}
+
+func productionFileSnapshotCapture() filesnapshot.CaptureFunc {
+	return filesnapshot.Capture
 }

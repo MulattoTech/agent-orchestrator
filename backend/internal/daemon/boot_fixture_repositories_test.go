@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/forkseed"
 	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
@@ -355,5 +357,18 @@ func fixtureReapForkSeeds(effects bootFixtureEffects) func(context.Context, *sql
 		if err != nil && !errors.Is(err, context.Canceled) {
 			_ = effects.Deny("fork-seed.reconcile-failed")
 		}
+	}
+}
+
+// fixtureFileSnapshotCapture retains the real capture algorithm and makes its
+// command boundary explicit. Scratch dispatch must bypass it; an unexpected Git
+// project is a counted denial and cannot discover or launch a native Git binary.
+func fixtureFileSnapshotCapture(effects bootFixtureEffects) filesnapshot.CaptureFunc {
+	effects = repositoryFixtureEffects(effects)
+	return func(ctx context.Context, workspace string, refs ...string) error {
+		return filesnapshot.CaptureWithRunner(ctx, workspace,
+			func(context.Context, string, []string, io.Reader, ...string) (string, error) {
+				return "", effects.Deny("git.file-snapshot")
+			}, refs...)
 	}
 }
