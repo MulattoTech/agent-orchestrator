@@ -124,22 +124,45 @@ type Restore struct {
 // refuses with ErrTooLarge, recording nothing, when the untracked files are past
 // the limits above.
 func Capture(ctx context.Context, workspace string, refs ...string) error {
-	top, err := toplevel(ctx, workspace)
+	return CaptureWithRunner(ctx, workspace, git, refs...)
+}
+
+// CaptureFunc is the file snapshot effect supplied to each Chat service.
+type CaptureFunc func(context.Context, string, ...string) error
+
+// Runner executes one Git operation for CaptureWithRunner. Supplying it keeps
+// the capture algorithm, temporary index, size checks and ref transaction real
+// without an implicit executable fallback.
+type Runner func(context.Context, string, []string, io.Reader, ...string) (string, error)
+
+// CaptureWithRunner runs the same snapshot algorithm as Capture through an
+// explicit command boundary. A missing runner is an error, never native Git.
+func CaptureWithRunner(ctx context.Context, workspace string, runner Runner, refs ...string) error {
+	if runner == nil {
+		return errors.New("file snapshot command runner is required")
+	}
+	command := func(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return runner(ctx, dir, env, stdin, args...)
+	}
+	top, err := toplevelWithRunner(ctx, workspace, command)
 	if err != nil {
 		return err
 	}
-	head, err := git(ctx, top, nil, nil, "rev-parse", "--verify", "HEAD")
+	head, err := command(ctx, top, nil, nil, "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		return err
 	}
-	if err := checkUntracked(ctx, top); err != nil {
+	if err := checkUntrackedWithRunner(ctx, top, command); err != nil {
 		return err
 	}
-	current, err := capture(ctx, top, nil)
+	current, err := captureWithRunner(ctx, top, nil, command)
 	if err != nil {
 		return err
 	}
-	return record(ctx, top, head, current, refs...)
+	return recordWithRunner(ctx, top, head, current, command, refs...)
 }
 
 // Save records the worktree and index as Plan found them under ref, before Apply
@@ -151,15 +174,19 @@ func (r Restore) Save(ctx context.Context, ref string) error {
 // record writes files as a commit shaped like git stash's on top of head and
 // points every ref at it.
 func record(ctx context.Context, top, head string, files state, refs ...string) error {
+	return recordWithRunner(ctx, top, head, files, git, refs...)
+}
+
+func recordWithRunner(ctx context.Context, top, head string, files state, command Runner, refs ...string) error {
 	identity := []string{
 		"GIT_AUTHOR_NAME=Agent Orchestrator", "GIT_AUTHOR_EMAIL=agent-orchestrator@localhost",
 		"GIT_COMMITTER_NAME=Agent Orchestrator", "GIT_COMMITTER_EMAIL=agent-orchestrator@localhost",
 	}
-	index, err := git(ctx, top, identity, nil, "commit-tree", files.index, "-p", head, "-m", "ao file snapshot index")
+	index, err := command(ctx, top, identity, nil, "commit-tree", files.index, "-p", head, "-m", "ao file snapshot index")
 	if err != nil {
 		return err
 	}
-	snapshot, err := git(ctx, top, identity, nil, "commit-tree", files.worktree, "-p", head, "-p", index, "-m", snapshotSubject+top)
+	snapshot, err := command(ctx, top, identity, nil, "commit-tree", files.worktree, "-p", head, "-p", index, "-m", snapshotSubject+top)
 	if err != nil {
 		return err
 	}
@@ -167,7 +194,7 @@ func record(ctx context.Context, top, head string, files state, refs ...string) 
 	for _, ref := range refs {
 		fmt.Fprintf(&updates, "update %s %s\n", ref, snapshot)
 	}
-	_, err = git(ctx, top, nil, strings.NewReader(updates.String()), "update-ref", "--stdin")
+	_, err = command(ctx, top, nil, strings.NewReader(updates.String()), "update-ref", "--stdin")
 	return err
 }
 
@@ -402,7 +429,11 @@ func (r Restore) write(ctx context.Context, to state, write, remove []string) er
 // real index, so files whose stat data git already holds are not re-read. The
 // worktree tree leaves out ignored files other than those under ignored.
 func capture(ctx context.Context, top string, ignored []string) (state, error) {
-	realIndex, err := git(ctx, top, nil, nil, "rev-parse", "--git-path", "index")
+	return captureWithRunner(ctx, top, ignored, git)
+}
+
+func captureWithRunner(ctx context.Context, top string, ignored []string, command Runner) (state, error) {
+	realIndex, err := command(ctx, top, nil, nil, "rev-parse", "--git-path", "index")
 	if err != nil {
 		return state{}, err
 	}
@@ -420,22 +451,22 @@ func capture(ctx context.Context, top string, ignored []string) (state, error) {
 	}
 	env := []string{"GIT_INDEX_FILE=" + index}
 	var out state
-	if out.index, err = git(ctx, top, env, nil, "write-tree"); err != nil {
+	if out.index, err = command(ctx, top, env, nil, "write-tree"); err != nil {
 		return state{}, err
 	}
-	if err := clearAssumeUnchanged(ctx, top, env); err != nil {
+	if err := clearAssumeUnchangedWithRunner(ctx, top, env, command); err != nil {
 		return state{}, err
 	}
-	if _, err := git(ctx, top, env, nil, "add", "--all"); err != nil {
+	if _, err := command(ctx, top, env, nil, "add", "--all"); err != nil {
 		return state{}, err
 	}
 	if len(ignored) > 0 {
-		if _, err := git(ctx, top, env, nulList(ignored),
+		if _, err := command(ctx, top, env, nulList(ignored),
 			"--literal-pathspecs", "add", "--force", "--pathspec-from-file=-", "--pathspec-file-nul"); err != nil {
 			return state{}, err
 		}
 	}
-	if out.worktree, err = git(ctx, top, env, nil, "write-tree"); err != nil {
+	if out.worktree, err = command(ctx, top, env, nil, "write-tree"); err != nil {
 		return state{}, err
 	}
 	return out, nil
@@ -445,7 +476,11 @@ func capture(ctx context.Context, top string, ignored []string) (state, error) {
 // temporary index env names. git add skips files with the mark, so a snapshot
 // would miss their edits; the real index keeps its marks.
 func clearAssumeUnchanged(ctx context.Context, top string, env []string) error {
-	out, err := git(ctx, top, env, nil, "ls-files", "-v", "-z")
+	return clearAssumeUnchangedWithRunner(ctx, top, env, git)
+}
+
+func clearAssumeUnchangedWithRunner(ctx context.Context, top string, env []string, command Runner) error {
+	out, err := command(ctx, top, env, nil, "ls-files", "-v", "-z")
 	if err != nil {
 		return err
 	}
@@ -459,7 +494,7 @@ func clearAssumeUnchanged(ctx context.Context, top string, env []string) error {
 	if len(marked) == 0 {
 		return nil
 	}
-	_, err = git(ctx, top, env, nulList(marked), "update-index", "--no-assume-unchanged", "-z", "--stdin")
+	_, err = command(ctx, top, env, nulList(marked), "update-index", "--no-assume-unchanged", "-z", "--stdin")
 	return err
 }
 
@@ -559,7 +594,11 @@ func gitlink(ctx context.Context, top, tree string) (string, error) {
 // checkUntracked refuses a worktree whose untracked files are too many or too
 // large to copy into the object store before every turn.
 func checkUntracked(ctx context.Context, top string) error {
-	out, err := git(ctx, top, nil, nil, "ls-files", "-z", "--others", "--exclude-standard")
+	return checkUntrackedWithRunner(ctx, top, git)
+}
+
+func checkUntrackedWithRunner(ctx context.Context, top string, command Runner) error {
+	out, err := command(ctx, top, nil, nil, "ls-files", "-z", "--others", "--exclude-standard")
 	if err != nil {
 		return err
 	}
@@ -633,7 +672,11 @@ func removeFile(top, path string) error {
 // some other repository, such as a home directory under version control, is
 // refused: snapshotting or restoring it would act on that whole repository.
 func toplevel(ctx context.Context, workspace string) (string, error) {
-	top, err := git(ctx, workspace, nil, nil, "rev-parse", "--show-toplevel")
+	return toplevelWithRunner(ctx, workspace, git)
+}
+
+func toplevelWithRunner(ctx context.Context, workspace string, command Runner) (string, error) {
+	top, err := command(ctx, workspace, nil, nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrNotRepository, err)
 	}

@@ -221,6 +221,8 @@ func gitWorkspace(t *testing.T) string {
 	gitOutputIn(t, workspace, "init", "-q", "-b", "main")
 	gitOutputIn(t, workspace, "config", "user.email", "test@example.com")
 	gitOutputIn(t, workspace, "config", "user.name", "Test")
+	// Byte restoration assertions must not inherit a host line-ending policy.
+	gitOutputIn(t, workspace, "config", "core.autocrlf", "false")
 	writeWorkspaceFile(t, workspace, "a.txt", "base\n")
 	gitOutputIn(t, workspace, "add", ".")
 	gitOutputIn(t, workspace, "commit", "-q", "-m", "init")
