@@ -1963,6 +1963,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("PROJECT_COORDINATOR_OCCUPIED", "This project already has an active or reserved coordinator", nil)
 	case errors.Is(err, sessionmanager.ErrWorkspaceOwned):
 		return apierr.Conflict("WORKSPACE_WRITE_OWNER_CONFLICT", "Another live session owns this workspace", nil)
+	case errors.Is(err, sessionmanager.ErrWorkspaceOwnershipUnknown):
+		return apierr.Conflict("WORKSPACE_OWNERSHIP_UNKNOWN", "Workspace ownership could not be verified; no worker was started", nil)
 
 	case err == nil:
 		return nil
