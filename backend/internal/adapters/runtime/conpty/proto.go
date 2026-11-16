@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	conPTYHostProtocolVersion         = 4
+	conPTYHostProtocolVersion         = 5
 	conPTYStyledOutputProtocolVersion = 2
 	// Older hosts ignore MsgWatchForegroundReq and would stream raw output.
 	conPTYForegroundProtocolVersion = 3
@@ -21,6 +21,8 @@ const (
 
 // Message type constants. Values must match pty-host.ts MSG_* constants exactly.
 const (
+	MsgIdentityReq        byte = 0x0f // client -> host: exact HostIdentity
+	MsgIdentityRes        byte = 0x10 // host -> client: its own HostIdentity
 	MsgTerminalData       byte = 0x01 // host -> client: raw PTY output
 	MsgTerminalInput      byte = 0x02 // client -> host: raw keystrokes
 	MsgResize             byte = 0x03 // client -> host: JSON {cols, rows}
@@ -47,10 +49,11 @@ type ResizePayload struct {
 
 // StatusPayload is the JSON body for MsgStatusRes.
 type StatusPayload struct {
-	Alive           bool `json:"alive"`
-	PID             int  `json:"pid"`
-	ExitCode        *int `json:"exitCode,omitempty"`
-	ProtocolVersion int  `json:"protocolVersion,omitempty"`
+	HostIdentity    HostIdentity `json:"hostIdentity,omitempty"`
+	Alive           bool         `json:"alive"`
+	PID             int          `json:"pid"`
+	ExitCode        *int         `json:"exitCode,omitempty"`
+	ProtocolVersion int          `json:"protocolVersion,omitempty"`
 }
 
 // ForegroundPayload is the MsgForegroundState body: the foreground process

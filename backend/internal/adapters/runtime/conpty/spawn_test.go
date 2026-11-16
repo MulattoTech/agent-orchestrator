@@ -95,11 +95,18 @@ func TestStartedHostKillFailureRetainsPartialCreateEvidence(t *testing.T) {
 			return errors.New("current-owner force kill denied")
 		}), nil
 	}
-	if destroyErr := runtime.Destroy(context.Background(), effect.PossibleHandle()); destroyErr == nil || !strings.Contains(destroyErr.Error(), "current-owner force kill denied") {
-		t.Fatalf("Destroy current-owned partial create = %v, want controlled cleanup failure", destroyErr)
-	}
-	if currentKillCalls != 1 {
-		t.Fatalf("current-owned partial create force-kill calls = %d, want 1", currentKillCalls)
+	destroyErr := runtime.Destroy(context.Background(), effect.PossibleHandle())
+	if nativeHostOwnershipRequired {
+		if !errors.Is(destroyErr, ports.ErrRuntimeProbeInconclusive) || currentKillCalls != 0 {
+			t.Fatalf("unresolved Windows host cleanup=%v kills=%d", destroyErr, currentKillCalls)
+		}
+	} else {
+		if destroyErr == nil || !strings.Contains(destroyErr.Error(), "current-owner force kill denied") {
+			t.Fatalf("partial cleanup=%v", destroyErr)
+		}
+		if currentKillCalls != 1 {
+			t.Fatalf("force kill calls=%d, want1", currentKillCalls)
+		}
 	}
 
 	// The possible handle must remain fenceable even after a daemon restart.
@@ -176,6 +183,9 @@ func TestDefinitiveSpawnFailureRetainsCleanupAuthorityUntilUnregisterSucceeds(t 
 	runtime.unregisterHost = func(context.Context, string) error {
 		unregisterCalls++
 		return unregisterErr
+	}
+	runtime.unregisterExact = func(ctx context.Context, entry ptyregistry.Entry) error {
+		return runtime.unregisterHost(ctx, entry.SessionID)
 	}
 
 	_, err := runtime.Create(context.Background(), ports.RuntimeConfig{

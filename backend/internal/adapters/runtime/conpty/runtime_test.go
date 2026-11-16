@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,18 +95,22 @@ func TestCreateAndDestroyPassCallerContextToRegistryMutations(t *testing.T) {
 	isolateRegistry(t)
 	type contextKey struct{}
 	ctx := context.WithValue(context.Background(), contextKey{}, "registry-mutation")
-	rt := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string, HostOptions) (string, int, error) {
-		return "127.0.0.1:1", livePID(), nil
-	}})
+	hosts := map[string]*inProcHost{}
+	rt := newFakeRuntime(t, hosts, livePID())
+	defer func() {
+		for _, host := range hosts {
+			host.cleanup(t)
+		}
+	}()
 	rt.killHost = func(string) error { return nil }
 	rt.pidIsAlive = func(int) bool { return false }
 	registerCalls := 0
-	rt.registerHost = func(got context.Context, _ ptyregistry.Entry) error {
+	rt.registerHost = func(got context.Context, entry ptyregistry.Entry) error {
 		registerCalls++
 		if got.Value(contextKey{}) != "registry-mutation" {
 			t.Fatalf("Register context value = %v, want caller context", got.Value(contextKey{}))
 		}
-		return nil
+		return ptyregistry.Register(got, entry)
 	}
 	rt.unregisterHost = func(got context.Context, _ string) error {
 		if got.Value(contextKey{}) != "registry-mutation" {
@@ -114,6 +119,12 @@ func TestCreateAndDestroyPassCallerContextToRegistryMutations(t *testing.T) {
 		return nil
 	}
 
+	rt.unregisterExact = func(got context.Context, entry ptyregistry.Entry) error {
+		if got.Value(contextKey{}) != "registry-mutation" {
+			t.Fatal("exact cleanup lost caller context")
+		}
+		return ptyregistry.UnregisterExact(got, entry)
+	}
 	handle, err := rt.Create(ctx, ports.RuntimeConfig{
 		SessionID: "sess-registry-context", WorkspacePath: t.TempDir(), Argv: []string{"codex"},
 		Env: map[string]string{runtimeLaunchIDEnv: "registry-context-launch"},
@@ -171,7 +182,7 @@ func TestPartialCreateCleanupFailureReturnsRuntimeEffectEvidence(t *testing.T) {
 func TestRuntimeProvidesStyledRenderedTerminalOutput(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	runtime := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
+	runtime := newFakeRuntime(t, hosts, livePID())
 	var candidate any = runtime
 	if _, ok := candidate.(ports.StyledTerminalOutputReader); !ok {
 		t.Fatal("ConPTY runtime must expose its rendered current surface")
@@ -258,6 +269,14 @@ func TestRuntimeRejectsStyledOutputFromARecoveredLegacyHost(t *testing.T) {
 	}
 	runtime := New(Options{})
 	_, err = runtime.GetStyledOutput(context.Background(), ports.RuntimeHandle{ID: "sess-legacy"}, 10)
+	if nativeHostOwnershipRequired {
+		if !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
+			t.Fatalf("legacy host must remain unknown: %v", err)
+		}
+		_ = listener.Close()
+		<-serverDone
+		return
+	}
 	if !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
 		t.Fatalf("GetStyledOutput error = %v, want ErrStyledTerminalOutputUnavailable", err)
 	}
@@ -285,16 +304,17 @@ func TestRuntimeRejectsStyledOutputFromARecoveredLegacyHost(t *testing.T) {
 // listener and returns a fake spawner that returns that addr and a fake pid.
 // The caller must call cleanup() to shut down the host.
 type inProcHost struct {
-	addr   string
-	pid    int
-	pty    *fakePTY
-	ring   *Ring
-	cancel context.CancelFunc
-	done   chan error
-	ln     net.Listener
+	stopped *atomic.Bool
+	addr    string
+	pid     int
+	pty     *fakePTY
+	ring    *Ring
+	cancel  context.CancelFunc
+	done    chan error
+	ln      net.Listener
 }
 
-func startInProcHost(t *testing.T, sessionID string, fakePID int) *inProcHost {
+func startInProcHost(t *testing.T, sessionID string, fakePID int, identities ...HostIdentity) *inProcHost {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -304,22 +324,31 @@ func startInProcHost(t *testing.T, sessionID string, fakePID int) *inProcHost {
 	ring := NewRing()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	stopped := &atomic.Bool{}
+	var identity HostIdentity
+	if len(identities) > 0 {
+		identity = identities[0]
+	}
 	go func() {
-		done <- Serve(ctx, ServeConfig{
+		err := Serve(ctx, ServeConfig{
+			Identity:  identity,
 			SessionID: sessionID,
 			Listener:  ln,
 			PTY:       pty,
 			Ring:      ring,
 		})
+		stopped.Store(true)
+		done <- err
 	}()
 	return &inProcHost{
-		addr:   ln.Addr().String(),
-		pid:    fakePID,
-		pty:    pty,
-		ring:   ring,
-		cancel: cancel,
-		done:   done,
-		ln:     ln,
+		stopped: stopped,
+		addr:    ln.Addr().String(),
+		pid:     fakePID,
+		pty:     pty,
+		ring:    ring,
+		cancel:  cancel,
+		done:    done,
+		ln:      ln,
 	}
 }
 
@@ -339,7 +368,12 @@ func (h *inProcHost) cleanup(t *testing.T) {
 func fakeSpawnerFor(t *testing.T, hosts map[string]*inProcHost, fakePID int) hostSpawner {
 	t.Helper()
 	return func(ctx context.Context, sessionID, cwd string, argv []string, env map[string]string, _ HostOptions) (string, int, error) {
-		h := startInProcHost(t, sessionID, fakePID)
+		identity := HostIdentity{}
+		if nativeHostOwnershipRequired {
+			created := fakeHostCreation(fakePID)
+			identity = HostIdentity{SessionID: sessionID, LaunchID: env[hostLaunchIDEnv], RuntimeLaunchID: env[runtimeLaunchIDEnv], PID: fakePID, CreatedAt: created}
+		}
+		h := startInProcHost(t, sessionID, fakePID, identity)
 		if hosts != nil {
 			hosts[sessionID] = h
 		}
@@ -353,6 +387,8 @@ func fakeSpawnerFor(t *testing.T, hosts map[string]*inProcHost, fakePID int) hos
 
 func isolateRegistry(t *testing.T) {
 	t.Helper()
+	ptyregistry.SetRunFilePath("")
+	t.Cleanup(func() { ptyregistry.SetRunFilePath("") })
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
@@ -367,7 +403,7 @@ func isolateRegistry(t *testing.T) {
 func TestCreate_RegistersSession(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
+	rt := newFakeRuntime(t, hosts, livePID())
 
 	ctx := context.Background()
 	handle, err := rt.Create(ctx, ports.RuntimeConfig{
@@ -422,6 +458,7 @@ func TestCreate_RunFilePathScopesRegistryToInstanceDir(t *testing.T) {
 		Spawner:     fakeSpawnerFor(t, hosts, livePID()),
 		RunFilePath: filepath.Join(instanceDir, "running.json"),
 	})
+	fenceInProcRuntime(t, rt, hosts)
 
 	handle, err := rt.Create(context.Background(), ports.RuntimeConfig{
 		SessionID:     domain.SessionID("sess-scoped"),
@@ -446,7 +483,7 @@ func TestCreate_RunFilePathScopesRegistryToInstanceDir(t *testing.T) {
 func TestCreate_DuplicateErrors(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
+	rt := newFakeRuntime(t, hosts, livePID())
 	ctx := context.Background()
 
 	if _, err := rt.Create(ctx, ports.RuntimeConfig{
@@ -495,7 +532,7 @@ func TestCreate_InvalidIDErrors(t *testing.T) {
 func TestSendMessage_DeliversChunkedTextAndEnter(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
+	rt := newFakeRuntime(t, hosts, livePID())
 	ctx := context.Background()
 
 	handle, err := rt.Create(ctx, ports.RuntimeConfig{
@@ -555,7 +592,7 @@ func TestSendMessage_DeliversChunkedTextAndEnter(t *testing.T) {
 func TestSendInputDeliversEscapeByte(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
+	rt := newFakeRuntime(t, hosts, livePID())
 	handle, err := rt.Create(context.Background(), ports.RuntimeConfig{
 		SessionID: "sess-escape", WorkspacePath: "/tmp/w", Argv: []string{"sh"},
 	})
@@ -589,7 +626,7 @@ func TestSendInputDeliversEscapeByte(t *testing.T) {
 func TestSendMessage_LargeMessageChunked(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
+	rt := newFakeRuntime(t, hosts, livePID())
 	ctx := context.Background()
 
 	handle, _ := rt.Create(ctx, ports.RuntimeConfig{
@@ -649,7 +686,7 @@ func TestSendMessage_LargeMessageChunked(t *testing.T) {
 func TestGetOutput_ReturnsRingTail(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
+	rt := newFakeRuntime(t, hosts, livePID())
 	ctx := context.Background()
 
 	handle, _ := rt.Create(ctx, ports.RuntimeConfig{
@@ -678,7 +715,7 @@ func TestGetOutput_ReturnsRingTail(t *testing.T) {
 func TestIsAlive_TrueWhileServing_FalseAfterClose(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
+	rt := newFakeRuntime(t, hosts, livePID())
 	ctx := context.Background()
 
 	handle, _ := rt.Create(ctx, ports.RuntimeConfig{
@@ -704,7 +741,11 @@ func TestIsAlive_TrueWhileServing_FalseAfterClose(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	alive2, err2 := rt.IsAlive(ctx, handle)
-	if err2 != nil {
+	if nativeHostOwnershipRequired {
+		if !errors.Is(err2, ports.ErrRuntimeProbeInconclusive) {
+			t.Fatalf("host exit must retain unknown descendant ownership: %v", err2)
+		}
+	} else if err2 != nil {
 		t.Fatalf("IsAlive after close: %v", err2)
 	}
 	if alive2 {
@@ -715,7 +756,7 @@ func TestIsAlive_TrueWhileServing_FalseAfterClose(t *testing.T) {
 func TestSupervisedProcessExitKeepsHostAlive(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
+	rt := newFakeRuntime(t, hosts, livePID())
 	ctx := context.Background()
 
 	handle, err := rt.Create(ctx, ports.RuntimeConfig{
@@ -789,7 +830,7 @@ func TestIsAlive_FalseForUnknownSession(t *testing.T) {
 func TestDestroy_KillsHostAndCleansUp(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, deadPID())})
+	rt := newFakeRuntime(t, hosts, deadPID())
 	ctx := context.Background()
 
 	handle, err := rt.Create(ctx, ports.RuntimeConfig{
@@ -860,7 +901,11 @@ func TestDestroyRetainsSessionWhenPIDCannotBeStopped(t *testing.T) {
 	rt.destroyWait = 0
 
 	err := rt.Destroy(context.Background(), ports.RuntimeHandle{ID: "sess-stuck"})
-	if err == nil || !strings.Contains(err.Error(), "still alive") || !strings.Contains(err.Error(), "access denied") {
+	if nativeHostOwnershipRequired {
+		if !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
+			t.Fatalf("unqualified PID cleanup=%v", err)
+		}
+	} else if err == nil || !strings.Contains(err.Error(), "still alive") || !strings.Contains(err.Error(), "access denied") {
 		t.Fatalf("Destroy error = %v, want force-kill and final-liveness evidence", err)
 	}
 	rt.mu.Lock()
@@ -925,7 +970,11 @@ func TestResolveViaRegistry(t *testing.T) {
 	// Start a host directly (not through Create) to simulate a pre-existing
 	// pty-host from a previous daemon run. Use the current process PID so
 	// ptyregistry.List() does not prune the entry as dead.
-	h := startInProcHost(t, "sess-reg", livePID())
+	identity := HostIdentity{}
+	if nativeHostOwnershipRequired {
+		identity = HostIdentity{SessionID: "sess-reg", LaunchID: "recovered-host", PID: livePID(), CreatedAt: fakeHostCreation(livePID())}
+	}
+	h := startInProcHost(t, "sess-reg", livePID(), identity)
 	defer h.cleanup(t)
 
 	// Manually register the host in the registry.
@@ -933,6 +982,7 @@ func TestResolveViaRegistry(t *testing.T) {
 		SessionID:    "sess-reg",
 		PtyHostPID:   h.pid,
 		PipePath:     h.addr, // addr stored in PipePath field
+		HostLaunchID: identity.LaunchID, HostCreatedAt: identity.CreatedAt,
 		RegisteredAt: fmt.Sprintf("%d", time.Now().Unix()),
 	})
 	if err != nil {
@@ -941,6 +991,7 @@ func TestResolveViaRegistry(t *testing.T) {
 
 	// Create a Runtime with an empty in-memory map (simulates daemon restart).
 	rt := New(Options{Spawner: fakeSpawnerFor(t, nil, livePID())})
+	fenceInProcRuntime(t, rt, map[string]*inProcHost{"sess-reg": h})
 	ctx := context.Background()
 
 	// IsAlive must work via registry resolution.
@@ -1118,7 +1169,11 @@ func TestIsAlive_RefusedIsGone_TimeoutIsTransient(t *testing.T) {
 	rtRefused.mu.Unlock()
 
 	alive, err := rtRefused.IsAlive(context.Background(), ports.RuntimeHandle{ID: "gone"})
-	if alive || err != nil {
+	if nativeHostOwnershipRequired {
+		if alive || !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
+			t.Fatalf("unqualified refused owner=%t %v", alive, err)
+		}
+	} else if alive || err != nil {
 		t.Fatalf("IsAlive(refused) = (%v, %v), want (false, nil) definitively gone", alive, err)
 	}
 
@@ -1167,3 +1222,33 @@ func TestClientKill_Idempotent(t *testing.T) {
 
 // Ensure the packages compile (import check).
 var _ = io.Discard
+
+// In-process Serve fixtures never authorize real OS termination, even when a
+// live test-process PID is used to keep older Unix registry scans stable.
+func fakeHostCreation(pid int) string { return fmt.Sprintf("in-process-%d", pid) }
+
+type inProcOwnedHost struct{ host *inProcHost }
+
+func (p *inProcOwnedHost) Alive() (bool, error) { return !p.host.stopped.Load(), nil }
+func (p *inProcOwnedHost) Kill() error          { p.host.cancel(); return nil }
+func (p *inProcOwnedHost) Close() error         { return nil }
+func fenceInProcRuntime(t *testing.T, runtime *Runtime, hosts map[string]*inProcHost) {
+	t.Helper()
+	runtime.readHostCreation = func(pid int) (string, error) { return fakeHostCreation(pid), nil }
+	runtime.openHostProcess = func(pid int, created string, terminate bool) (ownedHostProcess, error) {
+		if created != fakeHostCreation(pid) {
+			return nil, errors.New("fake host creation mismatch")
+		}
+		for _, host := range hosts {
+			if host.pid == pid {
+				return &inProcOwnedHost{host: host}, nil
+			}
+		}
+		return nil, errors.New("fake host not found")
+	}
+}
+func newFakeRuntime(t *testing.T, hosts map[string]*inProcHost, pid int) *Runtime {
+	runtime := New(Options{Spawner: fakeSpawnerFor(t, hosts, pid)})
+	fenceInProcRuntime(t, runtime, hosts)
+	return runtime
+}

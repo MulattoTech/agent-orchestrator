@@ -55,8 +55,8 @@ func armClientDeadline(ctx context.Context, conn net.Conn, timeout time.Duration
 // clientSendMessage chunks message by 512 runes and sends each as a
 // MsgTerminalInput frame with 15ms gaps, then pauses 300ms and sends "\r".
 // Mirrors ptyHostSendMessage from pty-client.ts.
-func clientSendMessage(addr, message string) error {
-	conn, err := dialHost(addr, dialTimeout)
+func clientSendMessage(addr, message string, identities ...HostIdentity) error {
+	conn, err := dialOwnedHost(context.Background(), addr, dialTimeout, identities...)
 	if err != nil {
 		return err
 	}
@@ -97,8 +97,8 @@ func clientSendMessage(addr, message string) error {
 	return err
 }
 
-func clientSendInput(addr, input string) error {
-	conn, err := dialHost(addr, dialTimeout)
+func clientSendInput(addr, input string, identities ...HostIdentity) error {
+	conn, err := dialOwnedHost(context.Background(), addr, dialTimeout, identities...)
 	if err != nil {
 		return err
 	}
@@ -114,19 +114,22 @@ func clientSendInput(addr, input string) error {
 // clientGetOutput sends MsgGetOutputReq and reads frames until MsgGetOutputRes.
 // Returns "" on timeout or connection failure (no error), matching the TS.
 // lines <= 0 is handled by the caller (runtime.go rejects it before calling).
-func clientGetOutput(ctx context.Context, addr string, lines int) (string, error) {
-	return clientReadOutput(ctx, addr, lines, MsgGetOutputReq, MsgGetOutputRes)
+func clientGetOutput(ctx context.Context, addr string, lines int, identities ...HostIdentity) (string, error) {
+	return clientReadOutput(ctx, addr, lines, MsgGetOutputReq, MsgGetOutputRes, identities...)
 }
 
-func clientGetStyledOutput(ctx context.Context, addr string, lines int) (string, error) {
-	return clientReadOutput(ctx, addr, lines, MsgGetStyledOutputReq, MsgGetStyledOutputRes)
+func clientGetStyledOutput(ctx context.Context, addr string, lines int, identities ...HostIdentity) (string, error) {
+	return clientReadOutput(ctx, addr, lines, MsgGetStyledOutputReq, MsgGetStyledOutputRes, identities...)
 }
 
-func clientReadOutput(ctx context.Context, addr string, lines int, requestType, responseType byte) (string, error) {
-	conn, err := dialHostContext(ctx, addr, getOutputTimeout)
+func clientReadOutput(ctx context.Context, addr string, lines int, requestType, responseType byte, identities ...HostIdentity) (string, error) {
+	conn, err := dialOwnedHost(ctx, addr, getOutputTimeout, identities...)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
+		}
+		if len(identities) > 0 {
+			return "", err
 		}
 		return "", nil // ponytail: connect failure -> "" like the TS
 	}
@@ -205,8 +208,8 @@ func clientStatus(addr string) (status StatusPayload, hostAlive bool, transientE
 	return clientStatusContext(context.Background(), addr)
 }
 
-func clientStatusContext(ctx context.Context, addr string) (status StatusPayload, hostAlive bool, transientErr error) {
-	conn, err := dialHostContext(ctx, addr, isAliveTimeout)
+func clientStatusContext(ctx context.Context, addr string, identities ...HostIdentity) (status StatusPayload, hostAlive bool, transientErr error) {
+	conn, err := dialOwnedHost(ctx, addr, isAliveTimeout, identities...)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return StatusPayload{}, false, ctxErr
@@ -218,6 +221,9 @@ func clientStatusContext(ctx context.Context, addr string) (status StatusPayload
 			return StatusPayload{}, false, err
 		}
 		if isConnRefused(err) {
+			if len(identities) > 0 {
+				return StatusPayload{}, false, ownershipError(err)
+			}
 			return StatusPayload{}, false, nil
 		}
 		return StatusPayload{}, false, err
@@ -264,6 +270,9 @@ func clientStatusContext(ctx context.Context, addr string) (status StatusPayload
 			if result.err != nil {
 				return StatusPayload{}, false, result.err
 			}
+			if len(identities) > 0 && result.payload.HostIdentity != identities[0] {
+				return StatusPayload{}, false, ownershipError(errors.New("conpty: status host identity mismatch"))
+			}
 			return result.payload, true, nil
 		default:
 		}
@@ -279,6 +288,9 @@ func clientStatusContext(ctx context.Context, addr string) (status StatusPayload
 	case result := <-statusC:
 		if result.err != nil {
 			return StatusPayload{}, false, result.err
+		}
+		if len(identities) > 0 && result.payload.HostIdentity != identities[0] {
+			return StatusPayload{}, false, ownershipError(errors.New("conpty: status host identity mismatch"))
 		}
 		return result.payload, true, nil
 	default:
@@ -310,10 +322,15 @@ func isConnRefused(err error) bool {
 // clientKill sends MsgKillReq. Connection refused is idempotent success because
 // the host is already absent; other transport failures are preserved so
 // Destroy can combine them with its final PID evidence.
-func clientKill(addr string) error {
-	conn, err := dialHost(addr, isAliveTimeout)
+func clientKill(addr string) error { return clientKillOwned(context.Background(), addr) }
+
+func clientKillOwned(ctx context.Context, addr string, identities ...HostIdentity) error {
+	conn, err := dialOwnedHost(ctx, addr, isAliveTimeout, identities...)
 	if err != nil {
-		if isConnRefused(err) {
+		// A qualified stop must complete the same-connection handshake before
+		// an alive OS handle may be force-stopped. A refused port is not proof
+		// that a creation timestamp captured after READY belonged to our host.
+		if len(identities) == 0 && isConnRefused(err) {
 			return nil
 		}
 		return fmt.Errorf("dial pty-host for kill: %w", err)
@@ -329,30 +346,30 @@ func clientKill(addr string) error {
 
 // clientWatchForeground calls fn for every MsgForegroundState until ctx ends
 // or the host goes away.
-func clientWatchForeground(ctx context.Context, addr string, fn func(ForegroundPayload)) error {
+func clientWatchForeground(ctx context.Context, addr string, fn func(ForegroundPayload), identities ...HostIdentity) error {
 	return clientWatchFrames(ctx, addr, MsgWatchForegroundReq, MsgForegroundState, func(payload []byte) {
 		var state ForegroundPayload
 		if json.Unmarshal(payload, &state) == nil {
 			fn(state)
 		}
-	})
+	}, identities...)
 }
 
 // clientWatchTitle calls fn for every MsgTitleState until ctx ends or the host
 // goes away. The host sends its current title first.
-func clientWatchTitle(ctx context.Context, addr string, fn func(TitlePayload)) error {
+func clientWatchTitle(ctx context.Context, addr string, fn func(TitlePayload), identities ...HostIdentity) error {
 	return clientWatchFrames(ctx, addr, MsgWatchTitleReq, MsgTitleState, func(payload []byte) {
 		var state TitlePayload
 		if json.Unmarshal(payload, &state) == nil {
 			fn(state)
 		}
-	})
+	}, identities...)
 }
 
 // clientWatchFrames subscribes with request and passes each response frame's
 // payload to fn. The replay sent before the request is ignored.
-func clientWatchFrames(ctx context.Context, addr string, request, response byte, fn func(payload []byte)) error {
-	conn, err := dialHostContext(ctx, addr, dialTimeout)
+func clientWatchFrames(ctx context.Context, addr string, request, response byte, fn func(payload []byte), identities ...HostIdentity) error {
+	conn, err := dialOwnedHost(ctx, addr, dialTimeout, identities...)
 	if err != nil {
 		return err
 	}

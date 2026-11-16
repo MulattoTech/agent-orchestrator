@@ -25,9 +25,9 @@ import (
 // port), installs SIGTERM/SIGINT handlers, then runs Serve. Returns a process
 // exit code.
 //
-// ponytail: loopback bind only; any local process on this host can connect to
-// the assigned port. A per-session random token handshake is the upgrade path
-// if multi-user isolation is needed.
+// Windows hosts require a per-launch identity handshake before replay or
+// terminal control. This fences accidental stale PID/port reuse; it is not
+// an authorization boundary against another process running as the same user.
 func RunHost(args []string, stdout io.Writer) int {
 	opts, args := splitHostOptionArgs(args)
 	if len(args) < 3 {
@@ -41,6 +41,12 @@ func RunHost(args []string, stdout io.Writer) int {
 	shellArgs := args[3:]
 	if err := os.Chdir(cwd); err != nil {
 		fmt.Fprintf(os.Stderr, "pty-host [%s]: chdir %s: %v\n", sessionID, cwd, err)
+		return 1
+	}
+
+	identity, identityErr := currentHostIdentity(sessionID)
+	if identityErr != nil {
+		fmt.Fprintf(os.Stderr, "pty-host [%s]: process identity: %v\n", sessionID, identityErr)
 		return 1
 	}
 
@@ -98,6 +104,7 @@ func RunHost(args []string, stdout io.Writer) int {
 	ring := NewRing()
 	cfg := ServeConfig{
 		SessionID:   sessionID,
+		Identity:    identity,
 		Listener:    ln,
 		PTY:         pty,
 		Ring:        ring,

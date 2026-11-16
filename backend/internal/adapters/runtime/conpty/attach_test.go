@@ -17,7 +17,17 @@ import (
 func runtimeForFixture(id string, f *serveFixture) *Runtime {
 	r := New(Options{})
 	r.mu.Lock()
-	r.sessions[id] = &hostSession{addr: f.addr, pid: f.pty.PID()}
+	sess := &hostSession{addr: f.addr, pid: f.pty.PID()}
+	if nativeHostOwnershipRequired {
+		sess.pid = livePID()
+		created, err := readHostCreation(sess.pid)
+		if err != nil {
+			panic(err)
+		}
+		sess.identity = HostIdentity{SessionID: id, LaunchID: "fixture-" + id, PID: sess.pid, CreatedAt: created}
+		f.host.cfg.Identity = sess.identity
+	}
+	r.sessions[id] = sess
 	r.mu.Unlock()
 	return r
 }

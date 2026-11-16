@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -204,6 +205,17 @@ func TestListPrunesDeadPIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS == "windows" {
+		if len(got) != 2 {
+			t.Fatalf("Windows scan pruned unqualified owners: %+v", got)
+		}
+		data, readErr := os.ReadFile(regPath)
+		var disk []Entry
+		if readErr != nil || json.Unmarshal(data, &disk) != nil || len(disk) != 2 {
+			t.Fatalf("Windows scan lost ownership on disk: %s %v", data, readErr)
+		}
+		return
+	}
 	if len(got) != 1 || got[0].SessionID != "s1" {
 		t.Fatalf("expected [s1], got %v", got)
 	}
@@ -319,6 +331,12 @@ func TestRegistryPruneWritePermissionFailureIsUnknown(t *testing.T) {
 	}
 
 	got, complete, err := Scan(context.Background())
+	if runtime.GOOS == "windows" {
+		if err != nil || !complete || len(got) != 1 {
+			t.Fatalf("Windows scan attempted unsafe pruning: %+v %t %v", got, complete, err)
+		}
+		return
+	}
 	if !errors.Is(err, permissionErr) || complete || len(got) != 0 {
 		t.Fatalf("Scan prune write failure = (%v, %v, %v), want empty incomplete permission error", got, complete, err)
 	}
@@ -349,6 +367,9 @@ func TestScanCancellationStopsBeforePruneWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if runtime.GOOS == "windows" {
+		cancel()
+	} // Windows never performs PID-only pruning.
 	got, complete, err := Scan(ctx)
 
 	if !errors.Is(err, context.Canceled) || complete || len(got) != 0 {
@@ -456,5 +477,45 @@ func TestSetRunFilePathEmptyClearsOverride(t *testing.T) {
 	}
 	if _, err := os.Stat(regPath); err != nil {
 		t.Fatalf("expected default HOME-based registry at %s: %v", regPath, err)
+	}
+}
+
+func TestUnregisterExactRetainsSupersedingOwner(t *testing.T) {
+	for _, changed := range []string{"host-launch", "creation", "runtime-launch", "pid", "address"} {
+		t.Run(changed, func(t *testing.T) {
+			setupHome(t)
+			withFakePidAlive(t, func(int) bool { return true })
+			expected := Entry{SessionID: "s", PtyHostPID: 1234, PipePath: "127.0.0.1:2345", LaunchID: "runtime-a", HostLaunchID: "host-a", HostCreatedAt: "0000000000000001"}
+			successor := expected
+			switch changed {
+			case "host-launch":
+				successor.HostLaunchID = "host-b"
+			case "creation":
+				successor.HostCreatedAt = "0000000000000002"
+			case "runtime-launch":
+				successor.LaunchID = "runtime-b"
+			case "pid":
+				successor.PtyHostPID++
+			case "address":
+				successor.PipePath = "127.0.0.1:2346"
+			}
+			if err := Register(t.Context(), successor); err != nil {
+				t.Fatal(err)
+			}
+			if err := UnregisterExact(t.Context(), expected); !errors.Is(err, ErrOwnershipChanged) {
+				t.Fatalf("stale cleanup=%v", err)
+			}
+			got, err := List(t.Context())
+			if err != nil || len(got) != 1 || got[0] != successor {
+				t.Fatalf("successor lost: %+v %v", got, err)
+			}
+			if err := UnregisterExact(t.Context(), successor); err != nil {
+				t.Fatal(err)
+			}
+			got, err = List(t.Context())
+			if err != nil || len(got) != 0 {
+				t.Fatalf("exact cleanup failed: %+v %v", got, err)
+			}
+		})
 	}
 }
