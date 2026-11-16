@@ -42,6 +42,11 @@ func TestAccountStoreStorageFailureStageIsPathFree(t *testing.T) {
 			}
 		})
 	}
+	unexpected := accountStoreStorageFailureAt(`C:\\private\\auth.json`, errors.New(`secret token at C:\\private\\auth.json`))
+	var failure *codexAccountLocalFailure
+	if !errors.As(unexpected, &failure) || failure.operation != "unspecified" || failure.Error() != "account_storage_unsafe" {
+		t.Fatalf("unsafe operation failed closed: %#v", unexpected)
+	}
 }
 
 func TestCodexAccountStoreAndDeviceReconciliationNeverOpenProvider(t *testing.T) {
