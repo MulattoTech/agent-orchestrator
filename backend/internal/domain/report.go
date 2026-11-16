@@ -8,6 +8,21 @@ import (
 	"unicode/utf8"
 )
 
+// ReportDeliveryAcceptedError records durable transport acceptance despite a
+// provider refusal or an uncertain write. It is not proof of successful model
+// work. Only the internal report dispatcher consumes this receipt; other callers
+// retain Cause, and unknown provider outcomes require explicit reconciliation.
+type ReportDeliveryAcceptedError struct {
+	DeliveryID string
+	TurnID     string
+	Cause      error
+}
+
+func (e *ReportDeliveryAcceptedError) Error() string {
+	return fmt.Sprintf("report %s durably accepted as turn %s: %v", e.DeliveryID, e.TurnID, e.Cause)
+}
+func (e *ReportDeliveryAcceptedError) Unwrap() error { return e.Cause }
+
 const reportDeliveryPrefix = `<ao-report-delivery id="`
 
 // WrapReportDelivery marks an AO-authored report batch so provider prompt

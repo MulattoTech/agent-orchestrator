@@ -802,6 +802,28 @@ type Session struct {
 	AcceptedDeliveryLaunchID         string
 }
 
+type SessionAdmissionQueue struct {
+	ID          string
+	ProjectID   string
+	Operation   string
+	SessionID   string
+	Payload     string
+	State       string
+	Generation  int64
+	Owner       string
+	Attempts    int64
+	FailureCode string
+	CreatedAt   string
+	UpdatedAt   string
+	AvailableAt string
+}
+
+type SessionAdmissionSetting struct {
+	ID         int64
+	LimitsJson string
+	UpdatedAt  string
+}
+
 type SessionAgentAccount struct {
 	SessionID string
 	Provider  string

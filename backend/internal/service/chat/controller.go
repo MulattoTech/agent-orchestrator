@@ -2497,9 +2497,10 @@ func (c *Controller) BeginHandoff(
 	}
 
 	if policy == domain.SessionInterfaceTransitionInterrupt {
-		// Target preflight has succeeded. Settle every accepted queue row while
-		// sendMu and the armed gate make dispatch and explicit promotion impossible.
-		// Local durable state is committed before the external provider side effect.
+		// Target preflight has succeeded. Settle queued commands while sendMu
+		// and the armed gate prevent dispatch. Accepted internal report batches
+		// retain their durable queued turn for a later controlled Chat resume.
+		// Local durable state is committed before the external provider effect.
 		c.sendMu.Lock()
 		c.mu.Lock()
 		active := c.pendingTurnID != ""

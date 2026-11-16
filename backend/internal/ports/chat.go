@@ -521,7 +521,11 @@ type ChatUserMessage struct {
 // MessageDeliveryOptions describes facts about the message independent of the
 // mechanism AO uses to deliver it.
 type MessageDeliveryOptions struct {
-	InteractionAt time.Time
+	// ReportDelivery identifies internally generated durable semantic reports.
+	// A dispatcher may acknowledge a typed durable acceptance while preserving
+	// the underlying provider refusal or uncertain-write error for diagnostics.
+	ReportDelivery bool
+	InteractionAt  time.Time
 	// SenderSessionID is cooperative local identity, resolved from stored metadata.
 	SenderSessionID string
 	AuthoredByUser  bool
