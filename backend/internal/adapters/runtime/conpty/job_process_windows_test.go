@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"unicode/utf16"
 	"unsafe"
@@ -15,9 +16,10 @@ import (
 )
 
 type fakeJobAttributes struct {
-	owner *fakeJobOperations
-	keys  []uintptr
-	job   windows.Handle
+	owner   *fakeJobOperations
+	keys    []uintptr
+	job     windows.Handle
+	console windows.Handle
 }
 
 func (a *fakeJobAttributes) Update(key uintptr, value unsafe.Pointer, size uintptr) error {
@@ -29,7 +31,7 @@ func (a *fakeJobAttributes) Update(key uintptr, value unsafe.Pointer, size uintp
 		a.job = *(*windows.Handle)(value)
 		return a.owner.step("job-list")
 	}
-	return a.owner.step("console")
+	return errors.New("unexpected pointer-valued attribute")
 }
 func (a *fakeJobAttributes) List() *windows.ProcThreadAttributeList {
 	return &windows.ProcThreadAttributeList{}
@@ -81,10 +83,18 @@ func (f *fakeJobOperations) operations() conPTYJobOperations {
 			}
 			return f.attributes, nil
 		},
+		attachConsole: func(attributes conPTYAttributes, console windows.Handle) error {
+			if attributes != f.attributes {
+				panic("console attribute used another list")
+			}
+			f.attributes.keys = append(f.attributes.keys, windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE)
+			f.attributes.console = console
+			return f.step("console")
+		},
 		create: func(_, _, _, _ *uint16, si *windows.StartupInfoEx, flags uint32) (windows.ProcessInformation, error) {
 			f.created++
 			f.flags = flags
-			if !reflect.DeepEqual(f.attributes.keys, []uintptr{windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, procThreadAttributeJobList}) || f.attributes.job != 101 || si.ProcThreadAttributeList == nil {
+			if !reflect.DeepEqual(f.attributes.keys, []uintptr{windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, procThreadAttributeJobList}) || f.attributes.job != 101 || f.attributes.console != 88 || si.ProcThreadAttributeList == nil {
 				panic("process creation did not carry both exact attributes")
 			}
 			if err := f.step("create"); err != nil {
@@ -198,17 +208,48 @@ func TestConPTYJobRetainsExactHandleAndPrivateLifetime(t *testing.T) {
 	}
 }
 func TestConPTYJobEnvironmentPreservesWindowsValues(t *testing.T) {
-	env, err := conPTYEnvironmentBlock([]string{"Path=old", "PATH=new", "UNICODE=Ω", "=C:=C:\\work"})
+	env, err := conPTYEnvironmentBlock([]string{"Path=old", "PATH=new", "UNICODE=Î©", "=C:=C:\\work"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	decoded := string(utf16.Decode(env))
-	if decoded != "=C:=C:\\work\x00PATH=new\x00UNICODE=Ω\x00\x00" {
+	if decoded != "=C:=C:\\work\x00PATH=new\x00UNICODE=Î©\x00\x00" {
 		t.Fatalf("environment block %q", decoded)
 	}
 	for _, bad := range []string{"NO_EQUALS", "BAD=one\x00two"} {
 		if _, err := conPTYEnvironmentBlock([]string{bad}); err == nil {
 			t.Fatalf("invalid environment accepted: %q", strings.ReplaceAll(bad, "\x00", "<NUL>"))
 		}
+	}
+}
+
+func TestConPTYPseudoConsoleAttributeUsesHandleValue(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		result    uintptr
+		lastError error
+		wantError error
+	}{
+		{"success-ignores-last-error", 1, windows.ERROR_ACCESS_DENIED, nil},
+		{"native-failure", 0, windows.ERROR_INVALID_PARAMETER, windows.ERROR_INVALID_PARAMETER},
+		{"missing-last-error", 0, syscall.Errno(0), windows.ERROR_INVALID_FUNCTION},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			list := new(windows.ProcThreadAttributeList)
+			// Deliberately not a Go pointer. Every handle bit must reach Win32.
+			console := windows.Handle(^uintptr(0) - 0x123)
+			called := 0
+			err := attachConPTYConsole(list, console, func(args ...uintptr) (uintptr, uintptr, error) {
+				called++
+				want := []uintptr{uintptr(unsafe.Pointer(list)), 0, windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, uintptr(console), unsafe.Sizeof(console), 0, 0}
+				if !reflect.DeepEqual(args, want) {
+					t.Fatalf("attribute arguments=%x want=%x", args, want)
+				}
+				return tc.result, 0, tc.lastError
+			})
+			if called != 1 || !errors.Is(err, tc.wantError) {
+				t.Fatalf("calls=%d err=%v want=%v", called, err, tc.wantError)
+			}
+		})
 	}
 }
