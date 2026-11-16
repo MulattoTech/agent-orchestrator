@@ -91,3 +91,13 @@ This evidence does not establish real-model throughput or memory capacity. It do
 not cover the full AO HTTP daemon, ConPTY UI, detached-host adoption, real provider
 billing/refresh, production worktree Git hooks, or deployment. Those boundaries
 need separate evidence before rollout.
+
+## Accepted cleanup retry budget
+
+An already-authorized cleanup that reports a transient busy-worktree refusal has
+one automatic retry after a deterministic 5–7 second delay. Starting an attempt
+and recording its deferred result count once. A second transient refusal records
+WORKSPACE_RETRY_EXHAUSTED and stops automatic retries across daemon restarts.
+Old pending records already at the budget stop without another removal attempt.
+Dirty/locked/unsafe worktrees remain preserved. The owner can explicitly retry
+after fixing the external cause; this does not reopen an automatic retry loop.
