@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -434,6 +435,9 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 	if rec.Activity.State == domain.ActivityExited {
 		g.logger.Info("sessionguard: write suppressed", "sessionID", id, "reason", "agent_exited")
 		return SuppressedExited, nil
+	}
+	if err := inferenceguard.CheckLaunch(string(rec.Harness), string(domain.NormalizeSessionMode(rec.Mode))); err != nil {
+		return SuppressedUnknown, fmt.Errorf("guard %s: %w", id, err)
 	}
 	if outcome, deny := refuse(rec); deny {
 		g.logger.Info("sessionguard: write suppressed", "sessionID", id, "reason", outcome.String(), "state", string(rec.Activity.State))

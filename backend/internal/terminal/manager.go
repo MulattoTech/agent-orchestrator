@@ -718,7 +718,7 @@ func (c *connState) handleTerminal(msg clientMsg) {
 		}
 		release, ok := c.mgr.acquireSessionInput(msg.ID)
 		if !ok {
-			c.enqueue(serverMsg{Ch: chTerminal, ID: msg.ID, Type: msgError, Error: "session input is disabled while an exclusive session operation is in progress"})
+			c.enqueue(serverMsg{Ch: chTerminal, ID: msg.ID, Type: msgError, Error: "session input is disabled by policy or an exclusive session operation"})
 			return
 		}
 		// A drain refuses input received while it is held, even if the write

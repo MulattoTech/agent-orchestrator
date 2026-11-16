@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	activityobserver "github.com/aoagents/agent-orchestrator/backend/internal/observe/activity"
 	artifactsobserver "github.com/aoagents/agent-orchestrator/backend/internal/observe/artifacts"
@@ -476,6 +477,9 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 	}
 	if rec.IsTerminated {
 		return fmt.Errorf("session %s: %w", id, sessionmanager.ErrTerminated)
+	}
+	if err := inferenceguard.CheckLaunch(string(rec.Harness), string(domain.SessionModeTUI)); err != nil {
+		return fmt.Errorf("session %s: %w", id, err)
 	}
 	if m.agents != nil {
 		agent, found := m.agents.Agent(rec.Harness)

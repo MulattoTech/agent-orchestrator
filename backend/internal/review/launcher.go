@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -231,7 +232,13 @@ func (l *agentLauncher) Preflight(ctx context.Context, harness domain.ReviewerHa
 		return fmt.Errorf("no reviewer adapter for harness %q", harness)
 	}
 	if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && (len(mode) == 0 || mode[0] != domain.ReviewerInterfaceTUI) && l.reviewChatSupported(profile) {
+		if err := inferenceguard.CheckLaunch(string(profile.ReviewChatHarness()), string(domain.SessionModeChat)); err != nil {
+			return err
+		}
 		return l.chat.PreflightReviewChat(ctx, profile.ReviewChatHarness())
+	}
+	if err := inferenceguard.CheckLaunch(string(harness), string(domain.SessionModeTUI)); err != nil {
+		return err
 	}
 	cmd, err := reviewer.ReviewCommand(ctx, ports.ReviewInvocation{WorkspacePath: workspacePath})
 	if err != nil {
@@ -454,7 +461,21 @@ func truncateReviewHistoryBody(body string) string {
 	return strings.TrimSpace(body[:maxBody]) + "..."
 }
 
+// checkLaunchPolicy resolves the same interaction surface as Spawn before it
+// writes prompt files or touches an existing reviewer pane.
+func (l *agentLauncher) checkLaunchPolicy(spec LaunchSpec) error {
+	if reviewer, ok := l.reviewers.Reviewer(spec.Harness); ok {
+		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && spec.InterfaceMode != domain.ReviewerInterfaceTUI && l.reviewChatSupported(profile) {
+			return inferenceguard.CheckLaunch(string(profile.ReviewChatHarness()), string(domain.SessionModeChat))
+		}
+	}
+	return inferenceguard.CheckLaunch(string(spec.Harness), string(domain.SessionModeTUI))
+}
+
 func (l *agentLauncher) Spawn(ctx context.Context, spec LaunchSpec) (LaunchResult, error) {
+	if err := l.checkLaunchPolicy(spec); err != nil {
+		return LaunchResult{}, err
+	}
 	inv, err := l.prepareInvocation(ctx, spec)
 	if err != nil {
 		return LaunchResult{}, err
@@ -472,6 +493,9 @@ func (l *agentLauncher) Spawn(ctx context.Context, spec LaunchSpec) (LaunchResul
 }
 
 func (l *agentLauncher) RestoreTerminal(ctx context.Context, spec LaunchSpec) (LaunchResult, error) {
+	if err := l.checkLaunchPolicy(spec); err != nil {
+		return LaunchResult{}, err
+	}
 	inv, err := l.prepareIdleInvocation(spec)
 	if err != nil {
 		return LaunchResult{}, err
@@ -485,6 +509,9 @@ func (l *agentLauncher) RestoreTerminal(ctx context.Context, spec LaunchSpec) (L
 }
 
 func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, inv ports.ReviewInvocation, profile ports.ReviewerChatProfile, restore bool) (LaunchResult, error) {
+	if err := inferenceguard.CheckLaunch(string(profile.ReviewChatHarness()), string(domain.SessionModeChat)); err != nil {
+		return LaunchResult{}, err
+	}
 	systemPrompt, err := os.ReadFile(inv.SystemPromptFile)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("read reviewer system prompt: %w", err)
@@ -510,6 +537,9 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 }
 
 func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec LaunchSpec, inv ports.ReviewInvocation, restoring bool) (LaunchResult, error) {
+	if err := inferenceguard.CheckLaunch(string(spec.Harness), string(domain.SessionModeTUI)); err != nil {
+		return LaunchResult{}, err
+	}
 	reviewer, ok := l.reviewers.Reviewer(spec.Harness)
 	if !ok {
 		return LaunchResult{}, fmt.Errorf("no reviewer adapter for harness %q", spec.Harness)
@@ -762,6 +792,13 @@ func prependPathDir(dir, path string) string {
 }
 
 func (l *agentLauncher) Notify(ctx context.Context, handleID string, spec LaunchSpec) error {
+	mode := domain.SessionModeTUI
+	if _, ok := reviewerChatID(handleID); ok && l.chat != nil {
+		mode = domain.SessionModeChat
+	}
+	if err := inferenceguard.CheckLaunch(string(spec.Harness), string(mode)); err != nil {
+		return err
+	}
 	reviewer, ok := l.reviewers.Reviewer(spec.Harness)
 	if !ok {
 		return fmt.Errorf("no reviewer adapter for harness %q", spec.Harness)
@@ -830,6 +867,10 @@ func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness dom
 		// Stop review cancels the turn, just like Stop in the Chat composer.
 		// Keep the controller and conversation usable; Archive owns teardown.
 		return l.chat.InterruptReviewChat(ctx, reviewID)
+	}
+	if inferenceguard.Enabled() {
+		// Cancellation must remain available, without sending a new model prompt.
+		return l.runtime.Interrupt(ctx, ports.RuntimeHandle{ID: handleID})
 	}
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {
