@@ -36,7 +36,7 @@ Snapshot is a non-inference local read of lockout, reset provenance, owner contr
 
 ## Native boundary limitations
 
-The guarded Codex Chat driver can enforce AO-visible requests. Terminal sessions, fallback providers and explicit native compaction without a per-request model/effort envelope are denied in strict mode.
+The guarded Codex Chat driver can enforce AO-visible requests. Terminal sessions, fallback providers and native steering and explicit compaction without a per-request model/effort envelope are denied in strict mode.
 
 An outer native turn can contain many internal model responses, automatic compaction or native subagents. This package does not claim that one outer turn equals one model response, or that the outer-turn cap bounds hidden native responses. Native internal dispatch behavior must be qualified separately before live fleet approval. The isolated candidate must remain emergency-stopped during the exhausted allowance and offline validation.
 
