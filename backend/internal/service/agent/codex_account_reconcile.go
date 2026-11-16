@@ -45,7 +45,7 @@ func (m *codexAccountManager) waitAccountStore(ctx context.Context) error {
 		}
 		call = &accountReconcileCall{done: make(chan struct{})}
 		m.accountStoreCall = call
-		go m.runAccountStoreInitialization(call)
+		m.background.Go(func() { m.runAccountStoreInitialization(call) })
 	}
 	m.mu.Unlock()
 	select {
@@ -169,7 +169,7 @@ func (m *codexAccountManager) reconcileGlobalWithPolicy(ctx context.Context, for
 		m.deferredAccountID = m.deviceAccountID
 		m.deviceCredentialPresent = false
 		started = true
-		go m.runGlobalReconciliation(call)
+		m.background.Go(func() { m.runGlobalReconciliation(call) })
 	}
 	m.mu.Unlock()
 	if started {
@@ -202,12 +202,12 @@ func (m *codexAccountManager) requestGlobalReconciliationIfNeeded() {
 	m.reconcileRequested = true
 	m.mu.Unlock()
 
-	go func() {
+	m.background.Go(func() {
 		_ = m.reconcileGlobal(m.ctx)
 		m.mu.Lock()
 		m.reconcileRequested = false
 		m.mu.Unlock()
-	}()
+	})
 }
 
 func (m *codexAccountManager) runGlobalReconciliation(call *accountReconcileCall) {
@@ -281,7 +281,7 @@ func classifyDeviceReconciliationFailure(err error) *codexAccountLocalFailure {
 }
 
 func (m *codexAccountManager) scheduleGlobalReconciliation(delay time.Duration) {
-	go func() {
+	m.background.Go(func() {
 		select {
 		case <-m.after(delay):
 			m.mu.Lock()
@@ -296,7 +296,7 @@ func (m *codexAccountManager) scheduleGlobalReconciliation(delay time.Duration) 
 			m.reconcileScheduled = false
 			m.mu.Unlock()
 		}
-	}()
+	})
 }
 
 func timePointer(value time.Time) *time.Time {
