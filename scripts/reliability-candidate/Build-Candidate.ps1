@@ -65,13 +65,16 @@ try {
     $conptyFlags = "-X $module/adapters/runtime/conpty.OfflineCandidateConPTYFixture=1"
     & $goTool test -p 1 -c -trimpath -ldflags $conptyFlags -o (Join-Path $releaseDir 'ao-offline-conpty.exe') ./internal/adapters/runtime/conpty 2>&1 | Tee-Object -FilePath $buildLog -Append
     if ($LASTEXITCODE -ne 0) { throw 'Offline candidate ConPTY fixture compilation failed.' }
+    $daemonFlags = "-X $module/daemon.OfflineDaemonFixture=1 -X $module/daemon.OfflineDaemonFixtureSource=$sourceCommit -X $module/inferenceguard.RequirePolicy=1"
+    & $goTool test -p 1 -c -trimpath -ldflags $daemonFlags -o (Join-Path $releaseDir 'ao-offline-daemon.exe') ./internal/daemon 2>&1 | Tee-Object -FilePath $buildLog -Append
+    if ($LASTEXITCODE -ne 0) { throw 'Offline complete daemon fixture compilation failed.' }
     $mainTest = Get-Content -LiteralPath (Join-Path $repo 'backend\internal\session_manager\main_test.go') -Raw
     $match = [regex]::Match($mainTest, '(?m)^const admissionOfflineTestAllowlist = "([^"]+)"')
     if (-not $match.Success -or $mainTest -notmatch 'admissionOfflineCompanion == "1"') {
         throw 'Compiled offline allowlist source could not be identified.'
     }
     [IO.File]::WriteAllText((Join-Path $releaseDir 'offline-test-allowlist.txt'), $match.Groups[1].Value + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-    foreach ($name in @('Candidate.Common.ps1', 'Build-Candidate.ps1', 'Run-Offline-Fleet.ps1', 'Run-Offline-ConPTY.ps1',
+    foreach ($name in @('Candidate.Common.ps1', 'Build-Candidate.ps1', 'Run-Offline-Fleet.ps1', 'Run-Offline-ConPTY.ps1', 'Run-Offline-Daemon.ps1',
         'Start-PostRefresh-Validation.ps1', 'Stop-Candidate.ps1', 'Test-CandidateScripts.ps1', 'policy.template.json', 'README.md')) {
         Copy-Item -LiteralPath (Join-Path $packageSource $name) -Destination (Join-Path $releaseDir $name) -ErrorAction Stop
     }
@@ -85,8 +88,12 @@ try {
     foreach ($file in Get-ChildItem -LiteralPath $releaseDir -File | Sort-Object Name) {
         $files[$file.Name] = @{ sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = $file.Length }
     }
+    foreach ($name in @('AO.exe', 'ao-offline-worker.exe', 'ao-offline-fleet.exe', 'ao-offline-conpty.exe', 'ao-offline-daemon.exe')) {
+        $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $releaseDir $name)
+        if ($signature.Status -ne 'NotSigned') { throw "Unexpected signing state for unofficial candidate: $name" }
+    }
     $manifest = [ordered]@{
-        schemaVersion = 1; candidate = $candidateName; sourceCommit = $sourceCommit; sourceClean = $true
+        schemaVersion = 1; candidate = $candidateName; sourceCommit = $sourceCommit; sourceClean = $true; unsigned = $true
         builtAtUtc = $date; version = $version; toolchain = $goVersion; target = 'windows/amd64'; strictPolicy = $true
         strictLinkerFlags = $strictFlags
         offlineCompanion = @{
@@ -99,7 +106,13 @@ try {
             internalOwnerTest = '^TestCandidateConPTYOwnerProcess$'; linkerFlags = $conptyFlags
             scope = 'Actual candidate pty-host plus fixed stdlib helper; no normal daemon/account/provider startup'
         }
-        validation = @{ syntheticFleet = 'NOT_RUN_BY_BUILD'; candidateConPTY = 'NOT_RUN_BY_BUILD'; daemonStartup = 'NOT_RUN'; liveProvider = 'NOT_RUN' }
+        offlineDaemon = @{
+            allowlistEnforced = $true; parentTest = '^TestOfflineDaemonLifecycleRecovery$'
+            internalChildTest = '^TestOfflineDaemonLifecycleChild$'; linkerFlags = $daemonFlags
+            sourcePinned = $sourceCommit; privateRootRequired = $true; port = 'ephemeral-loopback'
+            scope = 'Shared daemon Run lifecycle with complete test-only fake external effects; no real provider or normal AO.exe daemon startup'
+        }
+        validation = @{ syntheticFleet = 'NOT_RUN_BY_BUILD'; candidateConPTY = 'NOT_RUN_BY_BUILD'; fakeDaemon = 'NOT_RUN_BY_BUILD'; daemonStartup = 'NOT_RUN'; liveProvider = 'NOT_RUN' }
         files = $files
     }
     Write-CandidateJSONNew (Join-Path $releaseDir 'manifest.json') $manifest

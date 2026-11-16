@@ -24,7 +24,7 @@ $goCalls = @($build.FindAll({
     param($n)
     $n -is [Management.Automation.Language.CommandAst] -and $n.CommandElements[0].Extent.Text -eq '$goTool'
 }, $true))
-if ($goCalls.Count -ne 5) { throw 'Build must invoke only Go version, two builds, and two compile-only go test commands.' }
+if ($goCalls.Count -ne 6) { throw 'Build must invoke only Go version, two builds, and three compile-only go test commands.' }
 foreach ($call in $goCalls) {
     $parts = @($call.CommandElements | ForEach-Object { $_.Extent.Text })
     if ($parts[1] -notin @('version', 'build', 'test') -or ($parts[1] -eq 'test' -and '-c' -notin $parts)) {
@@ -45,10 +45,11 @@ if (-not $sources['Build-Candidate.ps1'].Contains('conpty.OfflineCandidateConPTY
     throw 'Candidate ConPTY companion must be compile-only and linked to its fixed TestMain.'
 }
 $compileCalls = @($goCalls | Where-Object { $_.CommandElements[1].Extent.Text -ceq 'test' })
-if ($compileCalls.Count -ne 2 -or
+if ($compileCalls.Count -ne 3 -or
     @($compileCalls | Where-Object { $_.Extent.Text -match './internal/session_manager' }).Count -ne 1 -or
-    @($compileCalls | Where-Object { $_.Extent.Text -match './internal/adapters/runtime/conpty' }).Count -ne 1) {
-    throw 'Build must compile exactly the fleet and ConPTY fixtures.'
+    @($compileCalls | Where-Object { $_.Extent.Text -match './internal/adapters/runtime/conpty' }).Count -ne 1 -or
+    @($compileCalls | Where-Object { $_.Extent.Text -match './internal/daemon' }).Count -ne 1) {
+    throw 'Build must compile exactly the fleet, ConPTY and daemon fixtures.'
 }
 $buildCommands = @($build.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() })
 if (@($buildCommands | Where-Object { $_ -in @('Start-Process', 'Invoke-RestMethod', 'Invoke-WebRequest') }).Count -ne 0) {
@@ -94,6 +95,39 @@ $conptyCommands = @($conpty.FindAll({ param($n) $n -is [Management.Automation.La
 if (@($conptyCommands | Where-Object { $_ -in @('Start-Process', 'Invoke-RestMethod', 'Invoke-WebRequest') }).Count -ne 0 -or
     $conptyText -match 'Start-PostRefresh-Validation|Stop-Candidate|AuthorizePostRefreshValidation|EnableAllowanceObservation') {
     throw 'Offline ConPTY runner must not call daemon startup/shutdown or native account observation.'
+}
+$daemon = $asts['Run-Offline-Daemon.ps1']
+$daemonText = $sources['Run-Offline-Daemon.ps1']
+$daemonCalls = @($daemon.FindAll({
+    param($n)
+    $n -is [Management.Automation.Language.CommandAst] -and $n.CommandElements[0].Extent.Text -ceq '$daemonExe'
+}, $true))
+if ($daemonCalls.Count -ne 1 -or $daemonCalls[0].CommandElements.Count -ne 1 -or $daemon.ParamBlock.Parameters.Count -ne 0) {
+    throw 'Offline daemon runner must execute only the fixed companion without arguments.'
+}
+foreach ($guard in @('Assert-CandidateBundle', "Assert-CandidateACLAncestors 'C:\'", 'New-Item -ItemType Directory -Path $fixtureRoot', 'SetAccessRuleProtection', 'Assert-CandidateACL $fixtureRoot -Private -CurrentOwner', "'fixture-root.json'")) {
+    $at = $daemonText.IndexOf($guard)
+    if ($at -lt 0 -or $at -gt $daemonCalls[0].Extent.StartOffset) { throw "Missing pre-fixture gate: $guard" }
+}
+foreach ($required in @('AO_DAEMON_FIXTURE_ROOT = $fixtureRoot', 'AO_DAEMON_FIXTURE_SOURCE = $bundle.Manifest.sourceCommit',
+    'AO_DAEMON_FIXTURE_EXE_SHA256 = $bundle.Manifest.files[''ao-offline-daemon.exe''].sha256',
+    '$item.Name -like ''AO_*''', '$item.Name -like ''CODEX_*''', '$item.Name -like ''*_API_KEY''', '$item.Name -like ''*_TOKEN''',
+    'fixture-proof.json', 'proof.runStarts -lt 2', 'proof.forbiddenEffectCount -ne 0', 'proof.realProviderCalls -ne 0',
+    'proof.crashRecoveryVerified', 'proof.gracefulShutdownVerified', 'proof.dirtyFilePreserved', 'proof.ownedChildCrash',
+    'proof.registeredSessions -ne 40', 'proofSHA256', 'logSHA256', 'manifestSHA256')) {
+    if (-not $daemonText.Contains($required)) { throw "Missing fixed daemon boundary: $required" }
+}
+$daemonCommands = @($daemon.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true))
+if (@($daemonCommands | Where-Object { $_.GetCommandName() -in @('Start-Process', 'Invoke-RestMethod', 'Invoke-WebRequest') }).Count -ne 0 -or
+    $daemonText -match 'Start-PostRefresh-Validation|Stop-Candidate|AuthorizePostRefreshValidation|EnableAllowanceObservation|\.SetOwner\(|\.SetAudit|RunAs') {
+    throw 'Offline daemon runner may not invoke live startup, account observation or elevation.'
+}
+$daemonACLWrites = @($daemonCommands | Where-Object { $_.GetCommandName() -eq 'Set-Acl' })
+if ($daemonACLWrites.Count -ne 1 -or $daemonACLWrites[0].Extent.Text -notmatch '-LiteralPath \$fixtureRoot -AclObject \$acl') {
+    throw 'Only the freshly created fixture root DACL may be modified.'
+}
+foreach ($required in @('daemon.OfflineDaemonFixture=1', 'daemon.OfflineDaemonFixtureSource=$sourceCommit', "'ao-offline-daemon.exe') ./internal/daemon", "fakeDaemon = 'NOT_RUN_BY_BUILD'", 'Get-AuthenticodeSignature', 'unsigned = $true')) {
+    if (-not $sources['Build-Candidate.ps1'].Contains($required)) { throw "Missing compiled daemon or signing identity: $required" }
 }
 $start = $asts['Start-PostRefresh-Validation.ps1']
 $starts = @($start.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start-Process' }, $true))
@@ -155,7 +189,8 @@ foreach ($required in @('Get-CandidateOwnedProcess', 'Get-CandidateOwnedRun', 's
 $commonText = $sources['Candidate.Common.ps1']
 foreach ($required in @('processStartTicksUtc', 'executableSHA256', 'Get-NetTCPConnection', 'OwningProcess',
     '$running.appRunId -cne $Record.runId', 'ReparsePoint', 'manifest.sha256', 'GetPathRoot', '0x500D0040', 'Get-Acl', 'SetAccessRuleProtection',
-    'ao-offline-conpty.exe', 'Run-Offline-ConPTY.ps1', 'offlineConPTY.allowlistEnforced')) {
+    'ao-offline-conpty.exe', 'Run-Offline-ConPTY.ps1', 'offlineConPTY.allowlistEnforced',
+    'ao-offline-daemon.exe', 'Run-Offline-Daemon.ps1', 'offlineDaemon.allowlistEnforced', 'offlineDaemon.sourcePinned', 'manifest.unsigned')) {
     if (-not $commonText.Contains($required)) { throw "Missing ownership/hash validation: $required" }
 }
 if ($commonText -match '\.SetOwner\(' -or $commonText -match '\.SetAudit' -or $commonText -match 'RunAs') {
@@ -183,5 +218,5 @@ foreach ($role in @('orchestrator', 'implementation', 'complex', 'reviewer', 'li
         if ($model -match '(?i)luna') { throw 'Template prematurely permits Luna.' }
     }
 }
-Write-Output "PASS: parsed $($asts.Count) PowerShell scripts; build is compile-only, fleet/ConPTY arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
+Write-Output "PASS: parsed $($asts.Count) PowerShell scripts; build is compile-only, fleet/ConPTY/daemon arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
 Write-Output 'Scope: AST/static validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'
