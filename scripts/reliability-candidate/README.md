@@ -172,8 +172,10 @@ environment, explicit private service roots and an ephemeral 127.0.0.1 listener;
 it never binds production port39421 or post-refresh port39431.
 
 The fixed test checks startup-constructor failure cleanup, two successful HTTP
-boots around an owned child crash, 40 registered synthetic sessions, retained
-queued work, uncertain dispatch/admission quarantine, exact durable report
+boots around an owned child crash and 40 registered synthetic sessions. Two
+sessions are active; the other 38 retain queued work behind real durable
+hibernation markers, which must survive reopening. It checks uncertain
+dispatch/admission quarantine, exact durable report
 attachment once, dirty-file preservation, graceful listener/run-file shutdown
 and store reopening. Exactly two simulated provider-write callbacks are allowed.
 Every unconfigured external effect is refused and counted; any such attempt

@@ -277,7 +277,9 @@ type fixtureSeedState struct {
 	ReportContent      string
 	ReportConversation string
 	ReportBatch        string
+	ReportClientID     string
 	QueueTurns         []string
+	HibernatedSessions []domain.SessionID
 }
 
 func seedDaemonFixture(t *testing.T, root string) fixtureSeedState {
@@ -305,21 +307,31 @@ func seedDaemonFixture(t *testing.T, root string) fixtureSeedState {
 	}
 	var state fixtureSeedState
 	for i := 0; i < 40; i++ {
-		id := domain.SessionID(fmt.Sprintf("fixture-worker-%02d", i))
 		kind := domain.KindWorker
 		scope := domain.ConversationScopeSession
 		if i == 0 {
-			id = "fixture-orchestrator"
 			kind = domain.KindOrchestrator
 			scope = domain.ConversationScopeProject
 		}
-		info, err := workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: "fixture-project", SessionID: id})
+		// CreateSession is the authoritative allocator; it never accepts a caller
+		// supplied identity. Seed every dependent row with the returned identity.
+		rec, err := store.CreateSession(ctx, domain.SessionRecord{ProjectID: "fixture-project", Kind: kind, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := rec.ID
+		// The fixed child HTTP/driver allowlists admit only sessions 2 and 3 in
+		// this fresh project. An allocator change must fail before child launch.
+		if id != domain.SessionID(fmt.Sprintf("fixture-project-%d", i+1)) {
+			t.Fatalf("unexpected fresh fixture allocation %q at index %d", id, i)
+		}
+		info, err := workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: rec.ProjectID, SessionID: id, Kind: kind})
 		if err != nil {
 			t.Fatal(err)
 		}
 		generation := "seed-generation-" + string(id)
-		_, err = store.CreateSession(ctx, domain.SessionRecord{ID: id, ProjectID: "fixture-project", Kind: kind, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now, Metadata: domain.SessionMetadata{WorkspacePath: info.Path, ProviderConversationID: "synthetic-thread-" + string(id), ControllerGeneration: generation, Model: fixtureAgentModel, Effort: fixtureAgentEffort}})
-		if err != nil {
+		rec.Metadata = domain.SessionMetadata{WorkspacePath: info.Path, ProviderConversationID: "synthetic-thread-" + string(id), ControllerGeneration: generation, Model: fixtureAgentModel, Effort: fixtureAgentEffort}
+		if err = store.UpdateSession(ctx, rec); err != nil {
 			t.Fatal(err)
 		}
 		conversation, err := store.CreateConversation(ctx, "conversation-"+string(id), scope, "fixture-project", id, now)
@@ -334,7 +346,7 @@ func seedDaemonFixture(t *testing.T, root string) fixtureSeedState {
 		}
 		msg := domain.ConversationMessage{ID: "message-" + string(id), Text: "Synthetic held request", Origin: domain.MessageOriginHuman, ClientMessageID: "queued-" + string(id)}
 		if i == 0 {
-			if _, err = store.CreateReport(ctx, domain.ReportRecord{ID: "fixture-report", SessionID: "fixture-orchestrator", ProjectID: "fixture-project", State: domain.ReportCheckpoint, Message: "Synthetic durable report", CreatedAt: now, AvailableAt: now, DeliveryState: domain.ReportPending, RepeatCount: 1}); err != nil {
+			if _, err = store.CreateReport(ctx, domain.ReportRecord{ID: "fixture-report", SessionID: id, ProjectID: rec.ProjectID, State: domain.ReportCheckpoint, Note: "Synthetic durable report", CreatedAt: now, AvailableAt: now, DeliveryState: domain.ReportPending, RepeatCount: 1}); err != nil {
 				t.Fatal(err)
 			}
 			claimed, err := store.ClaimPendingReportBatch(ctx, "fixture-project", "crashed-claimant", now)
@@ -349,6 +361,7 @@ func seedDaemonFixture(t *testing.T, root string) fixtureSeedState {
 			msg.DeliveryContentJSON = string(content)
 			state.ReportContent = string(content)
 			state.ReportConversation = conversation.ID
+			state.ReportClientID = msg.ClientMessageID
 			state.DirtyPath = filepath.Join(info.Path, "uncommitted-fixture.txt")
 			state.DirtyBytes = []byte("dirty synthetic work must survive all daemon episodes\r\n")
 			if err = os.WriteFile(state.DirtyPath, state.DirtyBytes, 0600); err != nil {
@@ -361,8 +374,20 @@ func seedDaemonFixture(t *testing.T, root string) fixtureSeedState {
 			t.Fatalf("seed turn=%v,%v", made, err)
 		}
 		state.QueueTurns = append(state.QueueTurns, turn)
+		// Hibernation is a separately owned durable field; general UpdateSession
+		// deliberately cannot overwrite it. Keep the held queue behind the same
+		// revision-fenced marker used by normal session hibernation and recovery.
+		current, found, err := store.GetSession(ctx, id)
+		if err != nil || !found {
+			t.Fatalf("read allocated session %s: found=%v err=%v", id, found, err)
+		}
+		changed, err := store.SetSessionHibernated(ctx, id, current.Revision, &now)
+		if err != nil || !changed {
+			t.Fatalf("hibernate held session %s: changed=%v err=%v", id, changed, err)
+		}
+		state.HibernatedSessions = append(state.HibernatedSessions, id)
 	}
-	request := domain.SessionAdmissionRequest{ID: "fixture-uncertain-admission", ProjectID: "fixture-project", SessionID: "fixture-worker-03", Operation: "restore", Payload: `{"sessionId":"fixture-worker-03"}`, CreatedAt: now, UpdatedAt: now, AvailableAt: now}
+	request := domain.SessionAdmissionRequest{ID: "fixture-uncertain-admission", ProjectID: "fixture-project", SessionID: "fixture-project-4", Operation: "restore", Payload: `{"sessionId":"fixture-project-4"}`, CreatedAt: now, UpdatedAt: now, AvailableAt: now}
 	if err = store.EnqueueSessionAdmission(ctx, request); err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +542,7 @@ func (c *daemonFixtureProcess) waitReady(t *testing.T) {
 func (c *daemonFixtureProcess) request(t *testing.T, method, path string, body any, want int) []byte {
 	t.Helper()
 	allowed := map[string]bool{"GET /healthz": true, "GET /api/v1/sessions": true, "GET /internal/reliability": true, "PUT /internal/reliability/inference": true, "POST /shutdown": true}
-	for _, id := range []string{"fixture-worker-01", "fixture-worker-02"} {
+	for _, id := range []string{"fixture-project-2", "fixture-project-3"} {
 		allowed["POST /api/v1/sessions/"+id+"/conversation/messages"] = true
 		allowed["GET /api/v1/sessions/"+id+"/conversation"] = true
 	}
@@ -671,11 +696,11 @@ func TestOfflineDaemonLifecycleRecovery(t *testing.T) {
 	first.request(t, "GET", "/api/v1/sessions", nil, http.StatusOK)
 	first.request(t, "GET", "/internal/reliability", nil, http.StatusOK)
 	first.request(t, "PUT", "/internal/reliability/inference", map[string]any{"emergency_stop": false, "pause": false}, http.StatusNoContent)
-	first.request(t, "POST", "/api/v1/sessions/fixture-worker-01/conversation/messages", map[string]string{"text": "Complete one synthetic turn", "clientMessageId": "fixture-complete"}, http.StatusAccepted)
+	first.request(t, "POST", "/api/v1/sessions/fixture-project-2/conversation/messages", map[string]string{"text": "Complete one synthetic turn", "clientMessageId": "fixture-complete"}, http.StatusAccepted)
 	fixtureWait(t, "completed synthetic HTTP turn", func() bool {
-		return bytes.Contains(first.request(t, "GET", "/api/v1/sessions/fixture-worker-01/conversation", nil, http.StatusOK), []byte("Synthetic completion; no model executed."))
+		return bytes.Contains(first.request(t, "GET", "/api/v1/sessions/fixture-project-2/conversation", nil, http.StatusOK), []byte("Synthetic completion; no model executed."))
 	})
-	first.request(t, "POST", "/api/v1/sessions/fixture-worker-02/conversation/messages", map[string]string{"text": "Hold one synthetic turn across crash", "clientMessageId": "fixture-uncertain"}, http.StatusAccepted)
+	first.request(t, "POST", "/api/v1/sessions/fixture-project-3/conversation/messages", map[string]string{"text": "Hold one synthetic turn across crash", "clientMessageId": "fixture-uncertain"}, http.StatusAccepted)
 	fixtureWait(t, "durable synthetic second write", func() bool {
 		_, err := os.Stat(filepath.Join(root, "synthetic-writes", "fixture-uncertain.json"))
 		return err == nil
@@ -715,6 +740,20 @@ func TestOfflineDaemonLifecycleRecovery(t *testing.T) {
 	if err != nil || len(sessions) != 40 {
 		t.Fatalf("registered sessions=%d err=%v", len(sessions), err)
 	}
+	held := map[domain.SessionID]bool{}
+	for _, rec := range sessions {
+		if rec.HibernatedAt != nil {
+			held[rec.ID] = true
+		}
+	}
+	if len(held) != len(seed.HibernatedSessions) {
+		t.Fatalf("durable held sessions=%d want=%d", len(held), len(seed.HibernatedSessions))
+	}
+	for _, id := range seed.HibernatedSessions {
+		if !held[id] {
+			t.Fatalf("held session %s unexpectedly woke", id)
+		}
+	}
 	for _, id := range seed.QueueTurns {
 		turn, err := store.TurnByID(ctx, id)
 		if err != nil || turn.State != domain.TurnStateQueued || turn.ProviderTurnID != "" {
@@ -725,7 +764,7 @@ func TestOfflineDaemonLifecycleRecovery(t *testing.T) {
 	if err != nil || !found || report.DeliveryState != domain.ReportAcknowledged || report.DeliveryBatchID != seed.ReportBatch || report.DeliveryAttempts != 1 {
 		t.Fatalf("report recovery=%+v,%v", report, err)
 	}
-	message, found, err := store.ConversationMessageByClientID(ctx, seed.ReportConversation, "queued-fixture-orchestrator")
+	message, found, err := store.ConversationMessageByClientID(ctx, seed.ReportConversation, seed.ReportClientID)
 	if err != nil || !found || message.DeliveryContentJSON != seed.ReportContent {
 		t.Fatalf("durable report attachment changed: found=%v err=%v", found, err)
 	}
@@ -807,7 +846,7 @@ func TestOfflineDaemonLifecycleRecovery(t *testing.T) {
 	proof := map[string]any{
 		"sourceCommit": marker.SourceCommit, "fixtureSHA256": marker.FixtureSHA256, "runStarts": starts, "registeredSessions": len(sessions), "forbiddenEffectCount": forbidden, "realProviderCalls": 0,
 		"crashRecoveryVerified": true, "ownedChildCrash": true, "gracefulShutdownVerified": true, "dirtyFilePreserved": true, "startupFailureCleanupVerified": true, "uncertainDispatchQuarantined": true, "uncertainAdmissionPreserved": true,
-		"queuedRequestsPreserved": len(seed.QueueTurns), "durableReportAttachmentPreserved": true, "syntheticProviderWrites": len(writes), "allowedSyntheticEffects": allowed, "allowedSyntheticEffectCounts": allowedCounts,
+		"queuedRequestsPreserved": len(seed.QueueTurns), "hibernatedHeldSessions": len(seed.HibernatedSessions), "durableReportAttachmentPreserved": true, "syntheticProviderWrites": len(writes), "allowedSyntheticEffects": allowed, "allowedSyntheticEffectCounts": allowedCounts,
 		"scope": "Shared daemon Run lifecycle; real SQLite, locks, migrations, CDC, HTTP, queues and recovery; explicit synthetic provider/runtime/account/SCM leaves. No real native or inference qualification.",
 	}
 	if err = writeFixtureJSONNew(filepath.Join(root, "fixture-proof.json"), proof); err != nil {

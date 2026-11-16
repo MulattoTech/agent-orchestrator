@@ -63,7 +63,8 @@ func (s *Service) lockPublication(id string) func() {
 
 // Publish reuses a saved result. A failed/missing verdict cannot be guessed,
 // and stale PR heads are rejected by the provider immediately before POST.
-// A durable claim makes every recovered attempt read-only until a matching\n// remote receipt becomes visible. Missing history never authorizes a new POST.
+// A durable claim makes every recovered attempt read-only until a matching
+// remote receipt becomes visible. Missing history never authorizes a new POST.
 func (s *Service) Publish(ctx context.Context, workerID domain.SessionID, runID string) (PublicationResult, error) {
 	if workerID == "" || strings.TrimSpace(runID) == "" {
 		return PublicationResult{}, fmt.Errorf("%w: worker and run are required", ErrInvalid)

@@ -21,7 +21,7 @@ func TestFixtureHTTPMiddlewareDeniesUnconfiguredEffectsBeforeController(t *testi
 	deps := fixtureBootDependencies(t.TempDir(), "synthetic-run", "crash", e)
 	calls := 0
 	handler := deps.HTTPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(204) }))
-	for _, route := range []string{"/api/v1/agents/codex/auth/login", "/api/v1/import", "/api/v1/sessions/fixture-worker-01/conversation/compact", "/internal/reliability/allowance/verify"} {
+	for _, route := range []string{"/api/v1/agents/codex/auth/login", "/api/v1/import", "/api/v1/sessions/fixture-project-2/conversation/compact", "/internal/reliability/allowance/verify"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest("POST", route, nil))
 		if response.Code != 403 {

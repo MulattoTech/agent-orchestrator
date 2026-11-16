@@ -50,7 +50,7 @@ func (d *fixtureChatDriver) open(ctx context.Context, cfg ports.ChatResumeConfig
 	if cfg.Model != fixtureAgentModel || cfg.Effort != fixtureAgentEffort {
 		return nil, d.effects.Deny("chat.model-policy-mismatch")
 	}
-	if d.phase == "recovery" && cfg.SessionID == "fixture-worker-02" {
+	if d.phase == "recovery" && cfg.SessionID == "fixture-project-3" {
 		d.effects.Allow("chat.synthetic-uncertain-reconnect")
 		return nil, fmt.Errorf("%w: synthetic dispatch outcome remains unknown", ports.ErrRuntimeProbeInconclusive)
 	}
@@ -123,7 +123,7 @@ func (c *fixtureChatConversation) SendTurn(ctx context.Context, msg ports.ChatUs
 	requestID := "synthetic-" + hex.EncodeToString(key[:])
 	nativeTurn := "synthetic-turn-" + msg.ClientMessageID
 	err = c.gate.Dispatch(ctx, inferenceguard.Request{ID: requestID, Session: string(c.cfg.SessionID), Project: string(c.cfg.ProjectID), NativeThreadID: c.cfg.ProviderConversationID, Operation: "turn/start", Selection: selected}, func() error {
-		if (msg.ClientMessageID != "fixture-complete" || c.cfg.SessionID != "fixture-worker-01") && (msg.ClientMessageID != "fixture-uncertain" || c.cfg.SessionID != "fixture-worker-02") {
+		if (msg.ClientMessageID != "fixture-complete" || c.cfg.SessionID != "fixture-project-2") && (msg.ClientMessageID != "fixture-uncertain" || c.cfg.SessionID != "fixture-project-3") {
 			return c.driver.effects.Deny("chat.unconfigured-provider-write")
 		}
 		c.driver.effects.Allow("chat.synthetic-provider-write")

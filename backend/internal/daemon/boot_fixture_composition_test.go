@@ -335,8 +335,8 @@ func (f fixtureAwake) AppAlive(context.Context, string, string) (bool, string, e
 func fixtureHTTPAllowed(method, path string) bool {
 	switch method + " " + path {
 	case "GET /healthz", "GET /api/v1/sessions", "GET /internal/reliability", "PUT /internal/reliability/inference", "POST /shutdown",
-		"POST /api/v1/sessions/fixture-worker-01/conversation/messages", "GET /api/v1/sessions/fixture-worker-01/conversation",
-		"POST /api/v1/sessions/fixture-worker-02/conversation/messages", "GET /api/v1/sessions/fixture-worker-02/conversation":
+		"POST /api/v1/sessions/fixture-project-2/conversation/messages", "GET /api/v1/sessions/fixture-project-2/conversation",
+		"POST /api/v1/sessions/fixture-project-3/conversation/messages", "GET /api/v1/sessions/fixture-project-3/conversation":
 		return true
 	default:
 		return false
