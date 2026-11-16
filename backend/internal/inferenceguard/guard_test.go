@@ -424,3 +424,86 @@ func TestRestartRetainsAmbiguousLeaseAndKnownReset(t *testing.T) {
 		t.Fatalf("%+v %v", s, err)
 	}
 }
+
+func TestReceiptReobservationPreservesFirstTimestamp(t *testing.T) {
+	p := testPolicy()
+	now := time.Now()
+	g := openFake(t, &p, &now)
+	ctx := context.Background()
+	r := UsageReceipt{SourceKey: "immutable-response", ProviderTurnID: "turn", Session: "session", Model: "sol", Effort: "medium", ObservedAt: now, InputTokens: 12, OutputTokens: 3, Confidence: "provider_response"}
+	if err := g.IngestReceipt(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	r.ObservedAt = now.Add(time.Hour)
+	if err := g.IngestReceipt(ctx, r); err != nil {
+		t.Fatal("rotated re-observation was not idempotent", err)
+	}
+	var at string
+	if err := g.db.QueryRow("SELECT observed_at FROM usage_receipts WHERE source_key=?", r.SourceKey).Scan(&at); err != nil || at != now.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("first timestamp changed: %s %v", at, err)
+	}
+	r.OutputTokens++
+	if err := g.IngestReceipt(ctx, r); err == nil {
+		t.Fatal("meaningful receipt conflict accepted")
+	}
+}
+func TestOwnerCorrectionCanResolveUndispatchedQueuedSelection(t *testing.T) {
+	p := testPolicy()
+	p.Pause = true
+	now := time.Now()
+	g := openFake(t, &p, &now)
+	ctx := context.Background()
+	r := request(t, g, "correctable", "project", "implementation", "sol", "medium")
+	if err := g.Dispatch(ctx, r, func() error { t.Fatal("paused"); return nil }); !errors.Is(err, ErrQuota) {
+		t.Fatal(err)
+	}
+	p.Pause = false
+	r = request(t, g, "correctable", "project", "implementation", "astra", "low")
+	if err := g.Dispatch(ctx, r, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var model, effort, detail string
+	if err := g.db.QueryRow("SELECT model,effort FROM attempts WHERE id=?", r.ID).Scan(&model, &effort); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.db.QueryRow("SELECT detail FROM dispatch_events WHERE attempt_id=? AND event='dispatch'", r.ID).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if model != "astra" || effort != "low" || detail == "" {
+		t.Fatalf("%s %s %s", model, effort, detail)
+	}
+}
+func TestBoundedAccountInterruptFanoutAndDetach(t *testing.T) {
+	p := testPolicy()
+	now := time.Now()
+	g := openFake(t, &p, &now)
+	var count atomic.Int64
+	for i := 0; i < 40; i++ {
+		g.RegisterStopper(func(context.Context) error { count.Add(1); return nil })
+	}
+	remove := g.RegisterStopper(func(context.Context) error { t.Error("detached controller interrupted"); return nil })
+	remove()
+	if err := g.InterruptActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if count.Load() != 40 {
+		t.Fatal(count.Load())
+	}
+	if stopped, err := g.HardStopped(context.Background()); err != nil || stopped {
+		t.Fatalf("unexpected hard stop %v %v", stopped, err)
+	}
+	p.Pause = true
+	if stopped, _ := g.HardStopped(context.Background()); stopped {
+		t.Fatal("soft pause hard-stopped active work")
+	}
+	p.EmergencyStop = true
+	if stopped, _ := g.HardStopped(context.Background()); !stopped {
+		t.Fatal("emergency did not hard-stop")
+	}
+	g.RegisterStopper(func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() })
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := g.InterruptActive(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+}

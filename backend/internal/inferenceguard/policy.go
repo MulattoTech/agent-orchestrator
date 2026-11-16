@@ -75,6 +75,7 @@ type Selection struct {
 	Effort          string `json:"effort"`
 	Role            string `json:"role"`
 	ExceptionID     string `json:"exception_id,omitempty"`
+	Rationale       string `json:"rationale"`
 }
 
 func Enabled() bool {
@@ -187,7 +188,7 @@ func (p Policy) Resolve(role, session, model, effort string, now time.Time) (Sel
 	if role == "" {
 		role = "implementation"
 	}
-	s := Selection{RequestedModel: model, RequestedEffort: effort, Role: role}
+	s := Selection{RequestedModel: model, RequestedEffort: effort, Role: role, Rationale: "explicit owner-allowed model and effort"}
 	r, ok := p.Roles[role]
 	if !ok {
 		return s, deny(ErrPolicy, "unknown role "+role)
@@ -195,10 +196,12 @@ func (p Policy) Resolve(role, session, model, effort string, now time.Time) (Sel
 	s.Model = model
 	if s.Model == "" {
 		s.Model = r.DefaultModel
+		s.Rationale = "owner role default model"
 	}
 	s.Effort = strings.ToLower(strings.TrimSpace(effort))
 	if s.Effort == "" {
 		s.Effort = p.MaximumEffort
+		s.Rationale += "; owner effort ceiling default"
 	}
 	if !contains(r.Models, s.Model) {
 		return s, deny(ErrPolicy, fmt.Sprintf("model %q is not allowed for %s", s.Model, role))
@@ -211,6 +214,7 @@ func (p Policy) Resolve(role, session, model, effort string, now time.Time) (Sel
 		for _, e := range p.Exceptions {
 			if e.ID != "" && e.Owner != "" && e.Reason != "" && e.Session == session && e.Model == s.Model && e.Effort == s.Effort && e.ExpiresAt.After(now) && e.ExpiresAt.Sub(now) <= 24*time.Hour {
 				s.ExceptionID = e.ID
+				s.Rationale += "; owner exception " + e.ID + ": " + e.Reason
 				return s, nil
 			}
 		}
