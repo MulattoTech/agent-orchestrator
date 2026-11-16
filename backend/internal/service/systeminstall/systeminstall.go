@@ -544,6 +544,14 @@ func New(executables ports.ExecutableFinder, commands ports.CommandRunner) *Serv
 // NewWithDeps returns a Service with durable harness-job and verification
 // dependencies supplied by the daemon.
 func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunner, deps Deps) *Service {
+	return newWithExternalEffects(executables, commands, deps, ExternalEffects{
+		ManagedVersion:   newManagedVersionChecker(commands, nil),
+		OfficialVersion:  officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
+		OwnsInstallation: managerOwnsBinary(commands),
+	})
+}
+
+func newWithExternalEffects(executables ports.ExecutableFinder, commands ports.CommandRunner, deps Deps, effects ExternalEffects) *Service {
 	installCommands, _ := commands.(ports.InstallCommandRunner)
 	installScripts, _ := commands.(ports.InstallScriptRunner)
 	managedBinaries, _ := commands.(ports.ManagedBinaryInstaller)
@@ -575,9 +583,9 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		persistenceTimeout:         defaultPersistenceTimeout,
 		stop:                       stop,
 		backgroundContext:          backgroundContext,
-		managedVersion:             newManagedVersionChecker(commands, nil),
-		officialVersion:            officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
-		ownsInstallation:           managerOwnsBinary(commands),
+		managedVersion:             effects.ManagedVersion,
+		officialVersion:            effects.OfficialVersion,
+		ownsInstallation:           effects.OwnsInstallation,
 		updateAdvisories:           make(map[Target]UpdateAdvisory),
 		updateAdvisoryCalls:        make(map[Target]*updateAdvisoryCall),
 		pathWritable:               pathWritable,
