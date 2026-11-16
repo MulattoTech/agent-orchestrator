@@ -28,6 +28,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -2081,6 +2082,24 @@ func (c *Controller) dispatch(
 	c.mu.Unlock()
 	ref, err := c.conv.SendTurn(ctx, msg)
 	if err != nil {
+		if inferenceguard.PreDispatchRefusal(err) && !errors.Is(err, inferenceguard.ErrUncertain) {
+			// This typed refusal proves no provider write happened. Preserve the queue,
+			// reports and authored message; never retry on a timer after quota exhaustion.
+			if requeue, ok := c.store.(interface {
+				RequeueUndispatchedTurns(context.Context, string, []string, string) error
+			}); ok {
+				ids := append([]string{turnID}, followers...)
+				if queueErr := requeue.RequeueUndispatchedTurns(context.WithoutCancel(ctx), c.conversation.ID, ids, err.Error()); queueErr != nil {
+					return domain.ConversationTurn{}, errors.Join(err, queueErr)
+				}
+				c.mu.Lock()
+				c.dispatchingTurnID = ""
+				c.artifactBaseline = nil
+				c.mu.Unlock()
+				return domain.ConversationTurn{ID: turnID, ConversationID: c.conversation.ID, HandledBySessionID: c.sessionID, State: domain.TurnStateQueued, ErrorMessage: err.Error(), RequestedAt: requestedAt}, err
+			}
+		}
+
 		captureChatFault(ctx, err, c.harness, "chat_turn", "send")
 		failFollowers("batch delivery to provider is uncertain: " + err.Error())
 		c.mu.Lock()

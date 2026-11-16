@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -64,6 +65,15 @@ func (c *conversation) Steer(
 	providerTurnID string,
 	msg ports.ChatUserMessage,
 ) (ports.ChatTurnRef, error) {
+	if c.guard != nil {
+		if _, err := c.guard.Resolve(c.guardRole, c.guardSession, msg.Settings.Model, msg.Settings.Effort); err != nil {
+			return ports.ChatTurnRef{}, err
+		}
+		if err := c.guard.Check(ctx); err != nil {
+			return ports.ChatTurnRef{}, err
+		}
+		return ports.ChatTurnRef{}, &inferenceguard.Refusal{Code: inferenceguard.ErrPolicy, Reason: "native steering cannot carry a verified model/effort envelope; queue a governed turn instead"}
+	}
 	providerTurnID = c.nativeID(providerTurnID)
 	if strings.TrimSpace(msg.Text) == "" {
 		// Same rule as SendTurn: there is no keystroke concept here, so an empty

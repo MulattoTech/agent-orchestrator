@@ -304,7 +304,10 @@ var PermissionModesStrictestFirst = []PermissionMode{
 
 // ChatStartConfig is what a driver needs to open a new provider conversation.
 type ChatStartConfig struct {
-	SessionID domain.SessionID
+	// PolicyRole and ProjectID carry trusted dispatch ownership, never prompt text.
+	PolicyRole string
+	ProjectID  domain.ProjectID
+	SessionID  domain.SessionID
 	// DataDir is AO's state root. Provider bindings may write process-scoped
 	// configuration beneath it, but must never use the worktree or an OS-default
 	// application-data directory for AO-owned state.
@@ -363,6 +366,8 @@ type ChatStartConfig struct {
 
 // ChatResumeConfig reattaches to a provider conversation after a restart.
 type ChatResumeConfig struct {
+	PolicyRole string
+	ProjectID  domain.ProjectID
 	// ReconnectOnly forbids launching a replacement provider during a health check.
 	ReconnectOnly bool
 	// See ChatStartConfig.ProviderIDsScoped.

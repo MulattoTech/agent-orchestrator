@@ -328,6 +328,12 @@ func (c *conn) write(v any) error {
 // request sends a client->server request and waits for its response. The caller's
 // context bounds the wait; a late response is discarded by deliver.
 func (c *conn) request(ctx context.Context, method string, params, out any) error {
+	return c.requestWithWrite(ctx, method, params, out, nil)
+}
+
+// requestWithWrite allows the owner gate to guard the final byte write without
+// holding its global lock while waiting for provider output.
+func (c *conn) requestWithWrite(ctx context.Context, method string, params, out any, admit func(func() error) error) error {
 	id := c.nextID.Add(1)
 	ch := make(chan frame, 1)
 
@@ -343,7 +349,14 @@ func (c *conn) request(ctx context.Context, method string, params, out any) erro
 	if params != nil {
 		payload["params"] = params
 	}
-	if err := c.write(payload); err != nil {
+	write := func() error { return c.write(payload) }
+	var writeErr error
+	if admit != nil {
+		writeErr = admit(write)
+	} else {
+		writeErr = write()
+	}
+	if err := writeErr; err != nil {
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
