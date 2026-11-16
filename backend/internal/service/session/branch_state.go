@@ -10,6 +10,27 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+// BranchStateGit supplies the command effects used by branch reconciliation.
+// The service continues to own grouping, parsing, fingerprints, and persistence.
+type BranchStateGit interface {
+	Output(context.Context, string, ...string) (string, error)
+	MergeConflictFiles(context.Context, string, string, string) ([]string, bool)
+}
+
+type workspaceBranchStateGit struct{}
+
+func (workspaceBranchStateGit) Output(ctx context.Context, root string, args ...string) (string, error) {
+	return gitWorkspaceOutput(ctx, root, args...)
+}
+
+func (workspaceBranchStateGit) MergeConflictFiles(ctx context.Context, root, base, head string) ([]string, bool) {
+	return gitMergeConflictFiles(ctx, root, base, head)
+}
+
+// NewBranchStateGit returns production's noninteractive, hook-free Git effects.
+// Constructing this adapter performs no command or credential lookup.
+func NewBranchStateGit() BranchStateGit { return workspaceBranchStateGit{} }
+
 // branchStateWriter is the narrow store write for observed branch facts.
 type branchStateWriter interface {
 	SetSessionBranchState(ctx context.Context, id domain.SessionID, state domain.SessionBranchState) (bool, error)
@@ -110,7 +131,7 @@ func (s *Service) reconcileBranchStates(ctx context.Context, writer branchStateW
 	}
 
 	for _, targets := range repos {
-		tips, ok := readRefTips(ctx, targets)
+		tips, ok := s.readRefTips(ctx, targets)
 		if !ok {
 			continue
 		}
@@ -153,7 +174,7 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 	case base != "" && baseRef != "":
 		// One call counts both sides, so reading how far behind the base the
 		// branch is costs no extra git process.
-		ahead, behind, ok := gitLeftRightCount(ctx, root, local, base)
+		ahead, behind, ok := s.gitLeftRightCount(ctx, root, local, base)
 		if !ok {
 			// A failed read is not evidence that nothing was committed.
 			return nil
@@ -165,12 +186,12 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		// rather than dropping the other facts. The tips fingerprint above keeps
 		// this to one in-memory merge per new commit on either side.
 		if ahead > 0 && behind > 0 {
-			files, ok := gitMergeConflictFiles(ctx, root, base, local)
+			files, ok := s.branchStateGit.MergeConflictFiles(ctx, root, base, local)
 			state.Conflicts = ok && len(files) > 0
 		}
 	case base != "":
 		// Only a recorded commit: there is no base branch to be behind.
-		commits, ok := gitRevListCount(ctx, root, base+".."+local)
+		commits, ok := s.gitRevListCount(ctx, root, base+".."+local)
 		if !ok {
 			return nil
 		}
@@ -183,7 +204,7 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		state.RemoteBranch = branchStateRemote + "/" + target.branch
 		state.RemoteHead = remote
 	default:
-		unpushed, ok := gitRevListCount(ctx, root, remote+".."+local)
+		unpushed, ok := s.gitRevListCount(ctx, root, remote+".."+local)
 		if !ok {
 			return nil
 		}
@@ -202,7 +223,7 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 
 // readRefTips lists the branch, remote, and base tips of every target in one
 // repository with a single git process.
-func readRefTips(ctx context.Context, targets []branchTarget) (map[string]string, bool) {
+func (s *Service) readRefTips(ctx context.Context, targets []branchTarget) (map[string]string, bool) {
 	args := []string{"for-each-ref", "--format=%(objectname) %(refname)"}
 	seen := map[string]bool{}
 	add := func(ref string) {
@@ -220,7 +241,7 @@ func readRefTips(ctx context.Context, targets []branchTarget) (map[string]string
 			add(ref)
 		}
 	}
-	out, err := gitWorkspaceOutput(ctx, targets[0].rec.Metadata.WorkspacePath, args...)
+	out, err := s.branchStateGit.Output(ctx, targets[0].rec.Metadata.WorkspacePath, args...)
 	if err != nil {
 		return nil, false
 	}
@@ -310,8 +331,8 @@ func readGitHead(root string) (commonDir, branch, head string, ok bool) {
 	return filepath.Clean(commonDir), "", text, text != ""
 }
 
-func gitRevListCount(ctx context.Context, root, rangeSpec string) (int, bool) {
-	out, err := gitWorkspaceOutput(ctx, root, "rev-list", "--count", rangeSpec)
+func (s *Service) gitRevListCount(ctx context.Context, root, rangeSpec string) (int, bool) {
+	out, err := s.branchStateGit.Output(ctx, root, "rev-list", "--count", rangeSpec)
 	if err != nil {
 		return 0, false
 	}
@@ -321,8 +342,8 @@ func gitRevListCount(ctx context.Context, root, rangeSpec string) (int, bool) {
 
 // gitLeftRightCount counts the commits on head that base lacks and the commits
 // on base that head lacks.
-func gitLeftRightCount(ctx context.Context, root, head, base string) (ahead, behind int, ok bool) {
-	out, err := gitWorkspaceOutput(ctx, root, "rev-list", "--left-right", "--count", head+"..."+base)
+func (s *Service) gitLeftRightCount(ctx context.Context, root, head, base string) (ahead, behind int, ok bool) {
+	out, err := s.branchStateGit.Output(ctx, root, "rev-list", "--left-right", "--count", head+"..."+base)
 	if err != nil {
 		return 0, 0, false
 	}

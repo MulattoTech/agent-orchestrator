@@ -249,8 +249,9 @@ type Service struct {
 	manifestGroup  singleflight.Group
 	// branchStateMu serializes branch-state reconciles and guards branchTips,
 	// each session's last reconciled branch, remote, and base tips.
-	branchStateMu sync.Mutex
-	branchTips    map[domain.SessionID]string
+	branchStateMu  sync.Mutex
+	branchTips     map[domain.SessionID]string
+	branchStateGit BranchStateGit
 	// conflicts remembers the conflicting files of a PR's head against its base.
 	conflicts conflictCache
 	// signalCapable reports whether a harness has a hook pipeline that can
@@ -362,6 +363,10 @@ type Deps struct {
 	// same Capturer. Left nil, files are listed by path with no identity.
 	ArtifactTracker artifactTracker
 	ShareLinks      *sessionartifacts.ShareLinks
+	// BranchStateGit makes local branch observation commands explicit. Ordinary
+	// service constructors use native Git when nil; private boot wiring requires
+	// a supplied dependency before constructing the service.
+	BranchStateGit BranchStateGit
 }
 
 // NewWithDeps wires a session service with optional PR-claim dependencies.
@@ -371,6 +376,10 @@ func NewWithDeps(d Deps) *Service {
 		backgroundContext = context.Background()
 	}
 	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter, artifactTracker: d.ArtifactTracker, shareLinks: d.ShareLinks}
+	s.branchStateGit = d.BranchStateGit
+	if s.branchStateGit == nil {
+		s.branchStateGit = NewBranchStateGit()
+	}
 	s.terminalTitles, _ = d.Store.(terminalTitleSource)
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
