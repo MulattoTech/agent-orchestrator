@@ -201,7 +201,7 @@ func validateDaemonFixture(t *testing.T) (string, daemonFixtureMarker, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(executable) != "ao-offline-daemon.exe" || !strings.HasPrefix(strings.ToLower(executable), `c:\aodev\releases\ao-unofficial-`) {
+	if filepath.Base(executable) != "ao-offline-daemon.exe" || !strings.HasPrefix(strings.ToLower(executable), `c:\ao-mtechlabs-releases-20261116\ao-unofficial-`) {
 		t.Fatal("fixture executable outside candidate bundle")
 	}
 	actual, err := fixtureHashFile(executable)
