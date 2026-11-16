@@ -41,6 +41,8 @@ Test-SyntheticACL 'outsider read on ancestor' 'O:SYG:SYD:P(A;;FR;;;WD)(A;;FA;;;S
 Test-SyntheticACL 'outsider mutation on ancestor' 'O:SYG:SYD:P(A;;FA;;;WD)(A;;FA;;;SY)' 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW'
 Test-SyntheticACL 'outsider read on private root' 'O:SYG:SYD:P(A;;FR;;;WD)(A;;FA;;;SY)' 'AO_ACL_UNTRUSTED_PRIVATE_ALLOW' -Private
 Test-SyntheticACL 'untrusted owner' 'O:WDG:SYD:P(A;;FA;;;SY)' 'AO_ACL_OWNER_OR_DACL_UNVERIFIED'
+Test-SyntheticACL 'unsupported callback allow is refused' 'O:SYG:SYD:P(XA;;FR;;;WD;(TRUE))(A;;FA;;;SY)' 'AO_ACL_UNSUPPORTED_ALLOW_ACE'
+Test-SyntheticACL 'callback deny cannot grant' 'O:SYG:SYD:P(XD;;FA;;;WD;(TRUE))(A;;FA;;;SY)' 'PASS'
 Test-SyntheticACL 'inherit-only outsider allow ignored' 'O:SYG:SYD:P(A;IO;FA;;;WD)(A;;FA;;;SY)' 'PASS'
 Test-SyntheticACL 'inherited outsider allow on ancestor blocked' 'O:SYG:SYD:(A;ID;FA;;;WD)(A;;FA;;;SY)' 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW'
 Test-SyntheticACL 'system owner fails current-owner gate' 'O:SYG:SYD:P(A;;FA;;;SY)' 'AO_ACL_OWNER_OR_DACL_UNVERIFIED' -CurrentOwner
