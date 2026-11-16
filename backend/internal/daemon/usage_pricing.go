@@ -34,6 +34,15 @@ type usagePricingRuntime struct {
 }
 
 func newUsagePricingRuntime(config usagePricingRuntimeConfig) (*usagePricingRuntime, error) {
+	if config.Fetcher == nil {
+		config.Fetcher = catalogsync.NewFetcher(&http.Client{}, catalogsync.LiteLLMURL)
+	}
+	return newUsagePricingRuntimeWithFetcher(config)
+}
+
+// newUsagePricingRuntimeWithFetcher retains the real refresher, repair and
+// accounting pipeline without an implicit network fetcher.
+func newUsagePricingRuntimeWithFetcher(config usagePricingRuntimeConfig) (*usagePricingRuntime, error) {
 	if config.DataDir == "" || config.Store == nil {
 		return nil, errors.New("usage pricing runtime requires data dir and store")
 	}
@@ -43,7 +52,7 @@ func newUsagePricingRuntime(config usagePricingRuntimeConfig) (*usagePricingRunt
 	}
 	fetcher := config.Fetcher
 	if fetcher == nil {
-		fetcher = catalogsync.NewFetcher(&http.Client{}, catalogsync.LiteLLMURL)
+		return nil, errors.New("usage pricing requires an explicit catalog fetcher")
 	}
 	manager := pricing.NewManager(nil)
 	backfiller := usagesvc.NewCostBackfiller(config.Store, usagesvc.CostBackfillerConfig{

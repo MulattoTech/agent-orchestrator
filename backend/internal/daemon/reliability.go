@@ -34,22 +34,44 @@ type reliabilityAdmission interface {
 	SetAdmissionDispatchCheck(func(context.Context) error)
 }
 type reliabilityObserver struct {
-	mu           sync.Mutex
-	store        *sqlite.Store
-	admission    reliabilityAdmission
-	gate         *inferenceguard.Gate
-	receipts     *nativereceipts.Observer
-	host         *fleetpressure.HostSampler
-	pressure     *fleetpressure.Controller
-	ownerCeiling int
-	autoscale    bool
-	latest       fleetpressure.Decision
-	merged       *int64
-	errors       []string
-	at           time.Time
+	mu            sync.Mutex
+	store         *sqlite.Store
+	admission     reliabilityAdmission
+	gate          *inferenceguard.Gate
+	receipts      *nativereceipts.Observer
+	host          reliabilityHostSampler
+	worktreeCount func(context.Context, *sqlite.Store) (int, error)
+	pressure      *fleetpressure.Controller
+	ownerCeiling  int
+	autoscale     bool
+	latest        fleetpressure.Decision
+	merged        *int64
+	errors        []string
+	at            time.Time
+}
+
+type reliabilityHostSampler interface {
+	Sample(context.Context, time.Time) (fleetpressure.Measurement, error)
+	HandleObservation() fleetpressure.HandleObservation
+}
+
+type reliabilityObservations struct {
+	Host          reliabilityHostSampler
+	WorktreeCount func(context.Context, *sqlite.Store) (int, error)
 }
 
 func startReliability(ctx context.Context, cfg config.Config, store *sqlite.Store, lifecycle sessionLifecycle, accounts ports.CodexAccountClientFactory, accountHome string, log *slog.Logger) (*httpd.ReliabilityDeps, error) {
+	return startReliabilityWithObservations(ctx, cfg, store, lifecycle, accounts, accountHome, log, reliabilityObservations{
+		Host: fleetpressure.NewHostSampler(), WorktreeCount: registeredWorktreeCount,
+	})
+}
+
+// startReliabilityWithObservations retains quota, receipt and admission
+// observation while requiring explicit native host and Git observation effects.
+func startReliabilityWithObservations(ctx context.Context, cfg config.Config, store *sqlite.Store, lifecycle sessionLifecycle, accounts ports.CodexAccountClientFactory, accountHome string, log *slog.Logger, observations reliabilityObservations) (*httpd.ReliabilityDeps, error) {
+	if observations.Host == nil || observations.WorktreeCount == nil {
+		return nil, errors.New("reliability requires explicit host and worktree observers")
+	}
 	if !inferenceguard.Enabled() {
 		return nil, nil
 	}
@@ -64,7 +86,7 @@ func startReliability(ctx context.Context, cfg config.Config, store *sqlite.Stor
 	if !filepath.IsAbs(accountHome) {
 		return nil, errors.New("absolute native receipt root required")
 	}
-	o := &reliabilityObserver{store: store, admission: admission, gate: gate, host: fleetpressure.NewHostSampler(),
+	o := &reliabilityObserver{store: store, admission: admission, gate: gate, host: observations.Host, worktreeCount: observations.WorktreeCount,
 		receipts:  nativereceipts.NewObserver([]string{filepath.Join(accountHome, "sessions"), filepath.Join(accountHome, "archived_sessions")}, gate),
 		autoscale: os.Getenv("AO_FLEET_AUTOSCALE") == "1"}
 	admission.SetAdmissionDispatchCheck(func(ctx context.Context) error {
@@ -222,7 +244,9 @@ func (o *reliabilityObserver) observe(parent context.Context) {
 		}
 		o.receipts.Sweep(ctx, bindings)
 	}
-	if n, err := registeredWorktreeCount(ctx, o.store); err == nil {
+	if o.worktreeCount == nil {
+		codes = append(codes, "worktree_pressure_unknown")
+	} else if n, err := o.worktreeCount(ctx, o.store); err == nil {
 		m.Worktrees = &n
 	} else {
 		codes = append(codes, "worktree_pressure_unknown")
