@@ -31,6 +31,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
+	"github.com/aoagents/agent-orchestrator/backend/internal/localipc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
@@ -415,13 +416,14 @@ func seedDaemonFixture(t *testing.T, root string) fixtureSeedState {
 }
 
 type daemonFixtureProcess struct {
-	exited      atomic.Bool
-	cmd         *exec.Cmd
-	done        chan error
-	log         *os.File
-	root, phase string
-	address     string
-	runID       string
+	exited       atomic.Bool
+	cmd          *exec.Cmd
+	done         chan error
+	log          *os.File
+	root, phase  string
+	address      string
+	runID        string
+	ipcAddresses map[string]string
 }
 
 func fixtureChildEnv(root, source, hash, phase, nonce string) []string {
@@ -510,6 +512,7 @@ func (c *daemonFixtureProcess) waitReady(t *testing.T) {
 			return false
 		}
 		ready, recovered := false, false
+		c.ipcAddresses = map[string]string{}
 		observed := map[string]int{}
 		for _, e := range entries {
 			if e.Kind == "allowed" {
@@ -517,6 +520,9 @@ func (c *daemonFixtureProcess) waitReady(t *testing.T) {
 			}
 			if e.Kind == "forbidden" {
 				t.Fatalf("forbidden boot effect %s", e.Name)
+			}
+			if strings.HasPrefix(e.Name, "ipc.") {
+				c.ipcAddresses[e.Name] = e.Address
 			}
 			if e.Name == "http.ready" {
 				c.address = e.Address
@@ -538,6 +544,16 @@ func (c *daemonFixtureProcess) waitReady(t *testing.T) {
 	var info runfile.Info
 	if err := readFixtureJSON(filepath.Join(c.root, "state", "running.json"), &info); err != nil {
 		t.Fatal(err)
+	}
+	for _, binding := range []struct{ event, purpose, published string }{
+		{"ipc.browser-runtime.bound", "browser-runtime-browser", info.BrowserRuntimeAddress},
+		{"ipc.browser-stream.bound", "browser-stream", info.BrowserStreamAddress},
+		{"ipc.supervisor.bound", "supervise", info.SupervisorAddress},
+	} {
+		expected, err := localipc.PipeName(filepath.Join(c.root, "state", "running.json"), binding.purpose)
+		if err != nil || binding.published == "" || binding.published != expected || c.ipcAddresses[binding.event] != expected {
+			t.Fatalf("private IPC %s was not actually bound and published: got=%q bound=%q expected=%q err=%v", binding.purpose, binding.published, c.ipcAddresses[binding.event], expected, err)
+		}
 	}
 	host, port, err := net.SplitHostPort(c.address)
 	if err != nil || host != "127.0.0.1" || port == "39421" || port == "39431" || info.PID != c.cmd.Process.Pid || info.AppRunID != c.runID || strconv.Itoa(info.Port) != port {
@@ -850,6 +866,7 @@ func TestOfflineDaemonLifecycleRecovery(t *testing.T) {
 	}
 	proof := map[string]any{
 		"sourceCommit": marker.SourceCommit, "fixtureSHA256": marker.FixtureSHA256, "runStarts": starts, "registeredSessions": len(sessions), "forbiddenEffectCount": forbidden, "realProviderCalls": 0,
+		"privateIPCBindingsVerified": true, "privateIPCAddresses": second.ipcAddresses,
 		"crashRecoveryVerified": true, "ownedChildCrash": true, "gracefulShutdownVerified": true, "dirtyFilePreserved": true, "startupFailureCleanupVerified": true, "uncertainDispatchQuarantined": true, "uncertainAdmissionPreserved": true,
 		"queuedRequestsPreserved": len(seed.QueueTurns), "hibernatedHeldSessions": len(seed.HibernatedSessions), "durableReportAttachmentPreserved": true, "syntheticProviderWrites": len(writes), "allowedSyntheticEffects": allowed, "allowedSyntheticEffectCounts": allowedCounts,
 		"scope": "Shared daemon Run lifecycle; real SQLite, locks, migrations, CDC, HTTP, queues and recovery; explicit synthetic provider/runtime/account/SCM leaves. No real native or inference qualification.",

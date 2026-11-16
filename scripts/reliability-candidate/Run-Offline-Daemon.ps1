@@ -89,13 +89,43 @@ try {
     $proof = Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json -AsHashtable
     if ($proof.sourceCommit -cne $bundle.Manifest.sourceCommit -or
         $proof.fixtureSHA256 -cne $bundle.Manifest.files['ao-offline-daemon.exe'].sha256 -or
-        $proof.runStarts -lt 2 -or $proof.forbiddenEffectCount -ne 0 -or $proof.realProviderCalls -ne 0 -or
+        $proof.runStarts -ne 2 -or $proof.forbiddenEffectCount -ne 0 -or $proof.realProviderCalls -ne 0 -or
         $proof.crashRecoveryVerified -isnot [bool] -or -not $proof.crashRecoveryVerified -or
         $proof.gracefulShutdownVerified -isnot [bool] -or -not $proof.gracefulShutdownVerified -or
         $proof.dirtyFilePreserved -isnot [bool] -or -not $proof.dirtyFilePreserved -or
         $proof.ownedChildCrash -isnot [bool] -or -not $proof.ownedChildCrash -or
-        $proof.registeredSessions -ne 40) {
+        $proof.registeredSessions -ne 40 -or $proof.queuedRequestsPreserved -ne 38 -or
+        $proof.hibernatedHeldSessions -ne 38 -or $proof.syntheticProviderWrites -ne 2) {
         throw 'Daemon completion proof did not satisfy the fixed source, recovery and zero-provider contract.'
+    }
+    foreach ($required in @('startupFailureCleanupVerified', 'uncertainDispatchQuarantined',
+        'uncertainAdmissionPreserved', 'durableReportAttachmentPreserved', 'privateIPCBindingsVerified')) {
+        if ($proof[$required] -isnot [bool] -or -not $proof[$required]) {
+            throw "Daemon proof did not verify $required."
+        }
+    }
+    if ($proof.allowedSyntheticEffectCounts -isnot [System.Collections.IDictionary] -or
+        $proof.allowedSyntheticEffectCounts['chat.synthetic-provider-write'] -ne 2) {
+        throw 'Daemon proof does not contain exactly two synthetic write callbacks.'
+    }
+    $ipcPrefixes = @{
+        'ipc.browser-runtime.bound' = 'browser-runtime-browser'
+        'ipc.browser-stream.bound' = 'browser-stream'
+        'ipc.supervisor.bound' = 'supervise'
+    }
+    if ($proof.privateIPCAddresses -isnot [System.Collections.IDictionary] -or $proof.privateIPCAddresses.Count -ne 3) {
+        throw 'Daemon proof must contain exactly three private IPC bindings.'
+    }
+    $authorityDigest = $null
+    foreach ($key in $ipcPrefixes.Keys) {
+        $address = $proof.privateIPCAddresses[$key]
+        $pattern = '^\\\\\.\\pipe\\ao-' + $ipcPrefixes[$key] + '-v2-([0-9a-f]{64})$'
+        if ($address -isnot [string] -or $address -cnotmatch $pattern) {
+            throw "Daemon proof contains an invalid private IPC binding: $key."
+        }
+        $digest = [regex]::Match($address, $pattern).Groups[1].Value
+        if ($null -eq $authorityDigest) { $authorityDigest = $digest }
+        elseif ($authorityDigest -cne $digest) { throw 'Daemon IPC bindings do not share one qualified state authority.' }
     }
     $proofHash = (Get-FileHash -LiteralPath $proofPath -Algorithm SHA256).Hash.ToLowerInvariant()
     Copy-Item -LiteralPath $proofPath -Destination (Join-Path $resultDir 'fixture-proof.json') -ErrorAction Stop

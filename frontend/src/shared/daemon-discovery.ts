@@ -78,6 +78,7 @@ export type RunFileInfo = {
 	appRunId?: string;
 	browserRuntimeAddress?: string;
 	browserStreamAddress?: string;
+	supervisorAddress?: string;
 };
 
 /** Parse running.json contents. Returns null for malformed JSON or an invalid port. */
@@ -89,7 +90,7 @@ export function parseRunFile(contents: string): RunFileInfo | null {
 		return null;
 	}
 	if (typeof raw !== "object" || raw === null) return null;
-	const { pid, port, startedAt, owner, appRunId, browserRuntimeAddress, browserStreamAddress } = raw as {
+	const { pid, port, startedAt, owner, appRunId, browserRuntimeAddress, browserStreamAddress, supervisorAddress } = raw as {
 		pid?: unknown;
 		port?: unknown;
 		startedAt?: unknown;
@@ -97,6 +98,7 @@ export function parseRunFile(contents: string): RunFileInfo | null {
 		appRunId?: unknown;
 		browserRuntimeAddress?: unknown;
 		browserStreamAddress?: unknown;
+		supervisorAddress?: unknown;
 	};
 	if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) return null;
 	const startedAtMs = typeof startedAt === "string" ? Date.parse(startedAt) : NaN;
@@ -108,6 +110,7 @@ export function parseRunFile(contents: string): RunFileInfo | null {
 		appRunId: typeof appRunId === "string" ? appRunId : undefined,
 		browserRuntimeAddress: typeof browserRuntimeAddress === "string" ? browserRuntimeAddress : undefined,
 		browserStreamAddress: typeof browserStreamAddress === "string" ? browserStreamAddress : undefined,
+		supervisorAddress: typeof supervisorAddress === "string" ? supervisorAddress : undefined,
 	};
 }
 
@@ -125,4 +128,14 @@ export function defaultRunFilePath(
 	void platform;
 	if (!homeDir) return null;
 	return joinPath(homeDir, ".ao", "running.json");
+}
+
+/** Windows watchdog links use the exact backend-published, root-scoped locator.
+ * Missing/legacy shared names stay unlinked instead of guessing another root.
+ */
+export function windowsSupervisorAddress(info: RunFileInfo | null): string | null {
+	const address = info?.supervisorAddress;
+	return typeof address === "string" && /^\\\\\.\\pipe\\ao-supervise-v2-[0-9a-f]{64}$/.test(address)
+		? address
+		: null;
 }

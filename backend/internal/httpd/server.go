@@ -33,6 +33,8 @@ type Server struct {
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
 	stopAgents        atomic.Bool
+	// Set before Run, after the supervisor listener actually binds.
+	supervisorAddress string
 }
 
 // NewWithDeps constructs a Server with API dependencies supplied by the daemon
@@ -140,6 +142,10 @@ func (s *Server) IPv6LoopbackAddr() net.Addr {
 // keeping the loopback and LAN surfaces identical.
 func (s *Server) Handler() http.Handler { return s.http.Handler }
 
+// SetSupervisorAddress publishes only a successfully bound daemon-owned
+// listener. It must be called before Run; no inherited environment supplies it.
+func (s *Server) SetSupervisorAddress(address string) { s.supervisorAddress = address }
+
 // Run serves until ctx is cancelled (SIGINT/SIGTERM via signal.NotifyContext),
 // then performs a graceful shutdown bounded by cfg.ShutdownTimeout. It writes
 // running.json before serving and removes it on the way out. Run blocks until
@@ -165,6 +171,7 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 		AppRunID:              s.cfg.AppRunID,
 		BrowserRuntimeAddress: os.Getenv("AO_BROWSER_RUNTIME_ADDRESS"),
 		BrowserStreamAddress:  os.Getenv("AO_BROWSER_STREAM_ADDRESS"),
+		SupervisorAddress:     s.supervisorAddress,
 	}
 	if err := runfile.Write(s.cfg.RunFilePath, info); err != nil {
 		_ = s.listen.Close()

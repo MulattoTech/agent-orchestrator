@@ -1335,6 +1335,7 @@ func runWithDependencies(buildVersion string, boot bootDependencies) (retErr err
 			return fmt.Errorf("publish browser runtime address: %w", err)
 		}
 		log.Info("browser runtime: listening", "addr", addr)
+		boot.Observe(bootEvent{Name: "ipc.browser-runtime.bound", Address: addr})
 		startDaemonWorker(ctx, func() {
 			defer sentryobs.RecoverBackground()
 			if err := browserBroker.Serve(ctx, ln); err != nil {
@@ -1357,6 +1358,7 @@ func runWithDependencies(buildVersion string, boot bootDependencies) (retErr err
 			return fmt.Errorf("publish browser stream address: %w", err)
 		}
 		log.Info("browser stream: listening", "addr", addr)
+		boot.Observe(bootEvent{Name: "ipc.browser-stream.bound", Address: addr})
 		startDaemonWorker(ctx, func() {
 			defer sentryobs.RecoverBackground()
 			if err := browserStreamBroker.Serve(ctx, ln); err != nil {
@@ -1413,6 +1415,8 @@ func runWithDependencies(buildVersion string, boot bootDependencies) (retErr err
 	} else {
 		cleanup.add(5, func() { _ = ln.Close() })
 		log.Info("supervisor: listening", "addr", addr)
+		srv.SetSupervisorAddress(addr)
+		boot.Observe(bootEvent{Name: "ipc.supervisor.bound", Address: addr})
 		sup := supervisor.New(supervisorGrace, func() {
 			lifecycle.Record("supervisor_link_lost", map[string]any{"graceMs": supervisorGrace.Milliseconds()})
 			srv.RequestShutdownAfterDesktopExit()

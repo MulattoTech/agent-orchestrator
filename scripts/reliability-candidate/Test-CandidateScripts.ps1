@@ -112,9 +112,13 @@ foreach ($guard in @('Assert-CandidateBundle', "Assert-CandidateACLAncestors 'C:
 foreach ($required in @('AO_DAEMON_FIXTURE_ROOT = $fixtureRoot', 'AO_DAEMON_FIXTURE_SOURCE = $bundle.Manifest.sourceCommit',
     'AO_DAEMON_FIXTURE_EXE_SHA256 = $bundle.Manifest.files[''ao-offline-daemon.exe''].sha256',
     '$item.Name -like ''AO_*''', '$item.Name -like ''CODEX_*''', '$item.Name -like ''*_API_KEY''', '$item.Name -like ''*_TOKEN''',
-    'fixture-proof.json', 'proof.runStarts -lt 2', 'proof.forbiddenEffectCount -ne 0', 'proof.realProviderCalls -ne 0',
+    'fixture-proof.json', 'proof.runStarts -ne 2', 'proof.forbiddenEffectCount -ne 0', 'proof.realProviderCalls -ne 0',
     'proof.crashRecoveryVerified', 'proof.gracefulShutdownVerified', 'proof.dirtyFilePreserved', 'proof.ownedChildCrash',
-    'proof.registeredSessions -ne 40', 'proofSHA256', 'logSHA256', 'manifestSHA256')) {
+    'proof.registeredSessions -ne 40', 'proof.queuedRequestsPreserved -ne 38', 'proof.hibernatedHeldSessions -ne 38',
+    'proof.syntheticProviderWrites -ne 2', 'startupFailureCleanupVerified', 'uncertainDispatchQuarantined',
+    'uncertainAdmissionPreserved', 'durableReportAttachmentPreserved', 'privateIPCBindingsVerified',
+    'chat.synthetic-provider-write', 'proof.privateIPCAddresses.Count -ne 3', 'ipc.browser-runtime.bound',
+    'ipc.browser-stream.bound', 'ipc.supervisor.bound', 'authorityDigest -cne $digest', 'proofSHA256', 'logSHA256', 'manifestSHA256')) {
     if (-not $daemonText.Contains($required)) { throw "Missing fixed daemon boundary: $required" }
 }
 $daemonCommands = @($daemon.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true))

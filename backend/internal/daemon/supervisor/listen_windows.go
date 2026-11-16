@@ -4,34 +4,19 @@ package supervisor
 
 import (
 	"net"
-	"path/filepath"
-	"regexp"
 
 	"github.com/Microsoft/go-winio"
+	"github.com/aoagents/agent-orchestrator/backend/internal/localipc"
 )
 
-var unsafePipeChars = regexp.MustCompile(`[^a-zA-Z0-9\-]`)
-
-// pipeNameFromRunFile derives a per-instance named-pipe path from the
-// run-file's parent directory, mirroring the Unix supervise.sock placement.
-// ~/.ao/running.json  → \\.\pipe\ao-supervise          (default, backward-compatible)
-// ~/.ao/dev/running.json → \\.\pipe\ao-supervise-dev   (dev isolation)
-func pipeNameFromRunFile(runFilePath string) string {
-	if runFilePath == "" {
-		return `\\.\pipe\ao-supervise`
-	}
-	dir := filepath.Base(filepath.Dir(runFilePath))
-	if dir == ".ao" || dir == "." || dir == "" {
-		return `\\.\pipe\ao-supervise`
-	}
-	return `\\.\pipe\ao-supervise-` + unsafePipeChars.ReplaceAllString(dir, "-")
-}
-
-// Listen creates a Windows named pipe listener for the supervisor watchdog.
-// The pipe name is derived from runFilePath so dev and installed-app instances
-// use separate pipes and cannot collide.
+// Listen creates a watchdog listener under the complete physical state root.
+// The exact address is published in running.json; no basename/default fallback
+// may connect an independently configured AO instance to this supervisor.
 func Listen(runFilePath string) (net.Listener, string, error) {
-	name := pipeNameFromRunFile(runFilePath)
+	name, err := localipc.PipeName(runFilePath, "supervise")
+	if err != nil {
+		return nil, "", err
+	}
 	ln, err := winio.ListenPipe(name, nil)
 	if err != nil {
 		return nil, "", err

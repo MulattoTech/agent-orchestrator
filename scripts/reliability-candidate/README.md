@@ -183,6 +183,13 @@ fails the fixture. Real SQLite, migrations, locks, CDC, HTTP, service wiring and
 queue/recovery code execute. Providers, native runtime, account, SCM, tracker,
 network-export and host-command leaves remain synthetic.
 
+Windows IPC locators are derived from the complete canonical state directory
+and its filesystem identity. Both successful boots must publish and record the
+exact runtime, media and supervisor bindings; a healthy HTTP listener with
+failed/shared pipe bindings cannot pass. The desktop source consumes the exact
+published supervisor address. Pairing this candidate with an older Electron
+build that guesses a legacy basename pipe is not qualified.
+
 The fixture preserves a report's attachment and acknowledgement, not a claim
 that a model processed it. The proof records actual starts, 40 registrations,
 two synthetic writes, zero forbidden effects and zero real provider calls.
