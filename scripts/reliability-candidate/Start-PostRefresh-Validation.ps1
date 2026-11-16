@@ -2,6 +2,7 @@
 [CmdletBinding()]
 param(
     [switch]$AuthorizePostRefreshValidation,
+    [switch]$EnableAllowanceObservation,
     [Parameter(Mandatory)][string]$OwnerPolicyPath,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$VerifiedNativeAccountSHA256,
     [Parameter(Mandatory)][string]$NativeHome
@@ -65,6 +66,11 @@ $childEnv['AO_AGENT'] = 'codex'
 $childEnv['AO_INFERENCE_POLICY'] = $owner.Path
 $childEnv['AO_REQUIRE_INFERENCE_POLICY'] = '1'
 $childEnv['AO_ENABLE_ALLOWANCE_CHECK'] = '0'
+# This opt-in only exposes the separate non-model observation action. All
+# post-refresh, owner-policy and storage gates above still run first.
+if ($EnableAllowanceObservation) {
+    $childEnv['AO_ENABLE_ALLOWANCE_CHECK'] = '1'
+}
 $childEnv['AO_FAKE_HARNESS'] = '0'
 $childEnv['AO_FLEET_PRESET'] = '40'
 $childEnv['AO_MAX_WORKER_SESSIONS'] = '2'
@@ -88,7 +94,7 @@ Write-CandidateJSONNew (Join-Path $dataRoot 'launch-intent.json') @{
     runId = $runId; sourceCommit = $bundle.Manifest.sourceCommit; manifestSHA256 = $bundle.ManifestSHA256
     dataRoot = $dataRoot; runFile = $runFile; port = $port; ownerPolicyPath = $owner.Path
     policySHA256AtLaunch = $owner.SHA256; nativeAccountSHA256 = $VerifiedNativeAccountSHA256.ToLowerInvariant()
-    requestedAtUtc = [DateTimeOffset]::UtcNow.ToString('o'); allowanceCheckEnabled = $false
+    requestedAtUtc = [DateTimeOffset]::UtcNow.ToString('o'); allowanceCheckEnabled = [bool]$EnableAllowanceObservation
 }
 # Deliberately use "daemon"; "start" opens/downloads the desktop installation.
 $process = Start-Process -FilePath $aoExe -ArgumentList @('daemon') -WorkingDirectory $dataRoot -Environment $childEnv -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
@@ -113,7 +119,8 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
             $null = Get-CandidateOwnedRun $record
             $state = Invoke-RestMethod -Uri 'http://127.0.0.1:39431/internal/reliability' -Method Get -TimeoutSec 3 -NoProxy
             if (-not $state.inference.emergency_stop -or -not $state.inference.paused -or
-                $state.inference.inference_cap -ne 1 -or $state.allowanceCheckEnabled) {
+                $state.inference.inference_cap -ne 1 -or
+                [bool]$state.allowanceCheckEnabled -ne [bool]$EnableAllowanceObservation) {
                 throw 'Initial emergency stop, pause, inference cap or allowance gate differs from the required state.'
             }
             $ready = $true
@@ -125,9 +132,14 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
 if (-not $ready) { throw "Readiness not verified: $lastError. Data and process are retained; use the owned stop script if ownership checks succeed. Run record: $recordFile" }
 Write-CandidateJSONNew (Join-Path $dataRoot 'startup-observation.json') @{
     observedAtUtc = [DateTimeOffset]::UtcNow.ToString('o'); runId = $runId
-    emergencyStop = $true; paused = $true; inferenceCap = 1; allowanceCheckEnabled = $false
+    emergencyStop = $true; paused = $true; inferenceCap = 1; allowanceCheckEnabled = [bool]$EnableAllowanceObservation
     modelValidation = 'NOT_PERFORMED'; nativeInterruption = 'NOT_QUALIFIED'
 }
 Write-Output "Isolated candidate is ready and stopped for inference: http://127.0.0.1:39431/internal/reliability/dashboard"
 Write-Output "Run record: $recordFile"
+if ($EnableAllowanceObservation) {
+    Write-Output 'Non-model allowance observation is enabled for a separate explicit operator action. Startup did not invoke it.'
+} else {
+    Write-Output 'Non-model allowance observation remains disabled by default.'
+}
 Write-Output 'No allowance verification or model turn was requested. Keep emergency stop and pause enabled until the separate controlled qualification.'

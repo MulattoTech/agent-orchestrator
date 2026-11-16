@@ -66,6 +66,39 @@ foreach ($required in @("['AO_ENABLE_ALLOWANCE_CHECK'] = '0'", "['AO_REQUIRE_INF
     "['AO_PORT'] = '39431'", "['AO_OWNER'] = 'app'", "-ArgumentList @('daemon')")) {
     if (-not $startText.Contains($required)) { throw "Missing fixed startup boundary: $required" }
 }
+$allowanceParameter = @($start.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -ceq 'EnableAllowanceObservation' })
+if ($allowanceParameter.Count -ne 1 -or $null -ne $allowanceParameter[0].DefaultValue -or
+    @($allowanceParameter[0].Attributes | Where-Object { $_.TypeName.FullName -ceq 'switch' }).Count -ne 1) {
+    throw 'Allowance observation must be an explicit switch with no enabled default.'
+}
+$allowanceAssignments = @($start.FindAll({
+    param($n)
+    $n -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $n.Left.Extent.Text -ceq '$childEnv[''AO_ENABLE_ALLOWANCE_CHECK'']'
+}, $true) | Sort-Object { $_.Extent.StartOffset })
+if ($allowanceAssignments.Count -ne 2 -or $allowanceAssignments[0].Right.Extent.Text -cne "'0'" -or
+    $allowanceAssignments[1].Right.Extent.Text -cne "'1'") {
+    throw 'Allowance observation requires a literal disabled default and exactly one opt-in assignment.'
+}
+$enableIf = $allowanceAssignments[1].Parent
+while ($null -ne $enableIf -and $enableIf -isnot [Management.Automation.Language.IfStatementAst]) { $enableIf = $enableIf.Parent }
+if ($null -eq $enableIf -or $enableIf.Clauses.Count -ne 1 -or $null -ne $enableIf.ElseClause -or
+    $enableIf.Clauses[0].Item1.Extent.Text -cne '$EnableAllowanceObservation' -or
+    $enableIf.Clauses[0].Item2.Statements.Count -ne 1) {
+    throw 'Only the explicit allowance-observation switch may enable the bridge; it must not change policy.'
+}
+foreach ($guard in @('if (-not $AuthorizePostRefreshValidation)', '2026-11-21T12:30:00Z',
+    'Assert-CandidateBundle', 'Assert-CandidateOwnerPolicy', 'Assert-CandidateACLAncestors', 'Initialize-CandidatePrivateRoot')) {
+    $at = $startText.IndexOf($guard)
+    if ($at -lt 0 -or $at -gt $allowanceAssignments[1].Extent.StartOffset) {
+        throw "Allowance opt-in precedes required gate: $guard"
+    }
+}
+if ($startText -match '/allowance/verify' -or
+    -not $startText.Contains('[bool]$state.allowanceCheckEnabled -ne [bool]$EnableAllowanceObservation') -or
+    -not $startText.Contains('allowanceCheckEnabled = [bool]$EnableAllowanceObservation')) {
+    throw 'Startup must observe the requested allowance switch without invoking the verification endpoint.'
+}
 $startHTTP = @($start.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in @('Invoke-RestMethod', 'Invoke-WebRequest') }, $true))
 foreach ($call in $startHTTP) {
     if ($call.Extent.Text -notmatch '-Method Get') { throw 'Startup must not mutate HTTP state or request a model turn.' }
@@ -96,7 +129,7 @@ if ($aclWrites.Count -ne 1 -or $aclWrites[0].Extent.Text -notmatch '-LiteralPath
 $policy = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'policy.template.json') -Raw | ConvertFrom-Json -AsHashtable
 if ($policy.native_account_sha256 -ne '' -or -not $policy.emergency_stop -or -not $policy.pause -or
     $policy.maximum_effort -cne 'medium' -or $policy.maximum_inference -ne 1 -or
-    ($policy.turn_budget - $policy.reserve_turns) -ne 1 -or
+    $policy.turn_budget -ne 2 -or $policy.reserve_turns -ne 1 -or
     $policy.authority_path -cne 'C:\AO-MTechLabs-Private-20261116\authority\codex-owner-inference.sqlite') {
     throw 'Initial policy template is not fail-closed and globally shared.'
 }
@@ -108,5 +141,5 @@ foreach ($role in @('orchestrator', 'implementation', 'complex', 'reviewer', 'li
         if ($model -match '(?i)luna') { throw 'Template prematurely permits Luna.' }
     }
 }
-Write-Output "PASS: parsed $($asts.Count) PowerShell scripts; build is compile-only, fleet arguments are fixed, startup gates and owned stop checks are present, template is structurally valid."
+Write-Output "PASS: parsed $($asts.Count) PowerShell scripts; build is compile-only, fleet arguments are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
 Write-Output 'Scope: AST/static validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'

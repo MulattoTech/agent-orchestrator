@@ -23,7 +23,10 @@ explicit owner policy revision justify its use.
 
 Medium is the automatic effort maximum. The template starts with emergency stop
 and pause enabled, one simultaneous inference, project/reviewer inference caps
-of one, and only one admitted outer turn available before the reserve. An outer
+of one, with turn_budget=2 and reserve_turns=1: only one newly admitted AO
+outer turn is available. Only after that turn is fully reconciled may the owner
+explicitly raise the same authority/epoch budget to4 with reserve1, permitting
+at most two additional turns. Never reset the authority to regain budget. An outer
 turn can contain multiple native model responses; this is **not** a billable-call
 or dollar ceiling. Native hidden subagents and automatic compaction remain a
 live qualification limit.
@@ -161,12 +164,33 @@ or mobile listener settings. Installed-harness readiness/version probes can
 still occur at daemon startup; this is why the actual candidate daemon is not
 started during the offline phase.
 
-**AO_ENABLE_ALLOWANCE_CHECK=0 remains fixed.** Startup reads only health and
+**AO_ENABLE_ALLOWANCE_CHECK=0 is the default.** Startup reads only health and
 the local reliability snapshot; it does not verify allowance, start a thread,
-send a model turn, or resume work. An independently reviewed later step must
-enable and qualify the non-inference allowance bridge before the first
-controlled model turn. Unknown or incomplete native window layouts stay blocked.
-Fresh complete five-hour/weekly capacity can arrive in either native field order.
+send a model turn, or resume work. The optional **-EnableAllowanceObservation**
+switch sets the child bridge flag to1 only after the same explicit authorization,
+UTC, account-policy and storage gates. Emergency stop and pause remain enabled.
+The switch does not invoke an account endpoint or authorize a model turn.
+
+For a separately authorized post-refresh allowance observation, choose this
+launch command instead of the default command above:
+
+~~~powershell
+pwsh -NoProfile -File .\Start-PostRefresh-Validation.ps1 -AuthorizePostRefreshValidation -EnableAllowanceObservation -OwnerPolicyPath C:\AODev\owner-policy.json -VerifiedNativeAccountSHA256 <verified-64-character-hash> -NativeHome C:\Users\<owner>\.codex
+~~~
+
+If the default candidate is already running, first stop that exact run with the
+owned stop script, then use a new validation run and the preserved
+C:\AO-MTechLabs-Private-20261116\owner-policy.json instead of the first-launch
+policy path. Keep the shared authority intact. Setting an inherited environment
+variable does not opt in; the launcher clears inherited AO settings.
+
+After the opted-in launch verifies emergency stop, pause and inference cap1,
+the owner may explicitly select **Verify allowance without a model turn** on the
+local dashboard. That separate action performs only the qualified account-read /
+rate-limit / account-read sequence. It must leave dispatch stopped. Require fresh
+complete five-hour/weekly capacity, in either native field order, for the same
+account. Unknown or incomplete layouts stay blocked. Qualify the native bridge
+and catalog before authorizing the first controlled model turn.
 
 The launcher uses AO_OWNER=app with a unique reliability run ID solely to own
 the existing server-side stopAgents=true shutdown contract. It does not start
@@ -182,7 +206,8 @@ Successful startup prints its immutable candidate-run.json path and the local
 dashboard URL. Readiness requires exact PID, executable path/hash, OS process
 start time, run-file ID/port, owned loopback socket, and AO health service identity.
 The initial reliability snapshot must confirm emergency stop, pause, inference
-cap one, and disabled allowance verification.
+cap one, and an allowance-observation flag matching the explicit launch option
+(disabled by default).
 
 To stop only this candidate:
 
@@ -218,9 +243,16 @@ It checks compile-only build commands, fixed fake-run arguments, pre-launch
 gates, owned stop checks, and conservative policy structure. It never executes
 the start/stop scripts, AO, a provider, or an account endpoint.
 
-Only static start/stop checks are authorized in the exhausted-allowance phase.
-The final candidate's compiled offline companion is run separately after the
-final source commit. Fresh private-directory creation/DACL behavior, native-home
-safety, full account bootstrap, actual daemon startup, native catalog/account
-observations, allowance freshness, interrupt acknowledgement, native internal
-requests, and one bounded real engineering turn remain live qualification gates.
+Only static execution checks of these start/stop scripts are authorized in the
+exhausted-allowance phase. The final candidate's compiled offline companion is
+run separately after the final source commit. Fresh private-directory creation
+and DACL behavior, safe native-home metadata, fake daemon/ConPTY seams and
+complete descendant ownership are offline or host-engineering gates; they do
+not inherently require model allowance. Separate fixed-helper terminal evidence
+belongs in the repair bundle and must not be inferred from the fleet companion.
+
+Genuine account, model-catalog and allowance endpoints remain withheld under
+this run's provider non-execution boundary. Actual account bootstrap and this
+candidate's full daemon startup remain unverified. Provider interruption, native
+internal requests and the small real engineering canary require the later
+controlled native/model qualification after genuine allowance refresh.
