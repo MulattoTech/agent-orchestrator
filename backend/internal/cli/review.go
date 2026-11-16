@@ -106,12 +106,13 @@ type submitReviewRequest struct {
 }
 
 type reviewSubmitOptions struct {
-	session  string
-	runID    string
-	verdict  string
-	body     string
-	reviewID string
-	reviews  string
+	session     string
+	runID       string
+	verdict     string
+	body        string
+	reviewID    string
+	reviews     string
+	reviewsJSON string
 }
 
 type reviewSessionOptions struct {
@@ -155,6 +156,7 @@ func newReviewCommand(ctx *commandContext) *cobra.Command {
 	}
 	cmd.AddCommand(newReviewListCommand(ctx))
 	cmd.AddCommand(newReviewSubmitCommand(ctx))
+	cmd.AddCommand(newReviewPublishCommand(ctx))
 	cmd.AddCommand(newReviewCancelCommand(ctx))
 	cmd.AddCommand(newReviewTriggerCommand(ctx))
 	return cmd
@@ -208,6 +210,7 @@ func newReviewSubmitCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&opts.body, "body", "", "Review body: a path to a Markdown file, or - to read from stdin (so nothing is written into the worktree)")
 	cmd.Flags().StringVar(&opts.reviewID, "review-id", "", "Id of the GitHub PR review just posted (the .id from the gh api POST that created the review)")
 	cmd.Flags().StringVar(&opts.reviews, "reviews", "", "JSON review results array or object: a path, or - to read from stdin")
+	cmd.Flags().StringVar(&opts.reviewsJSON, "reviews-json", "", "JSON review results passed directly as one argument (no shell pipeline or file)")
 	return cmd
 }
 
@@ -219,7 +222,10 @@ func (c *commandContext) submitReview(cmd *cobra.Command, args []string, opts re
 	if session == "" {
 		return usageError{errors.New("usage: worker session id is required (positional or --session)")}
 	}
-	if strings.TrimSpace(opts.reviews) != "" {
+	if strings.TrimSpace(opts.reviewsJSON) != "" && strings.TrimSpace(opts.reviews) != "" {
+		return usageError{errors.New("usage: --reviews-json cannot be combined with --reviews")}
+	}
+	if strings.TrimSpace(opts.reviews) != "" || strings.TrimSpace(opts.reviewsJSON) != "" {
 		return c.submitReviewBatch(cmd, session, opts)
 	}
 	runID := strings.TrimSpace(opts.runID)
@@ -266,7 +272,13 @@ func (c *commandContext) submitReviewBatch(cmd *cobra.Command, session string, o
 	if strings.TrimSpace(opts.runID) != "" || strings.TrimSpace(opts.verdict) != "" || strings.TrimSpace(opts.body) != "" || strings.TrimSpace(opts.reviewID) != "" {
 		return usageError{errors.New("usage: --reviews cannot be combined with --run, --verdict, --body, or --review-id")}
 	}
-	reviews, err := readReviewItems(cmd, strings.TrimSpace(opts.reviews))
+	var reviews []submitReviewItem
+	var err error
+	if strings.TrimSpace(opts.reviewsJSON) != "" {
+		reviews, err = decodeReviewItems([]byte(opts.reviewsJSON))
+	} else {
+		reviews, err = readReviewItems(cmd, strings.TrimSpace(opts.reviews))
+	}
 	if err != nil {
 		return err
 	}
@@ -514,6 +526,10 @@ func readReviewItems(cmd *cobra.Command, path string) ([]submitReviewItem, error
 	if err != nil {
 		return nil, usageError{fmt.Errorf("read review results: %w", err)}
 	}
+	return decodeReviewItems(raw)
+}
+
+func decodeReviewItems(raw []byte) ([]submitReviewItem, error) {
 	var req submitReviewRequest
 	if err := json.Unmarshal(raw, &req); err == nil && len(req.Reviews) > 0 {
 		return req.Reviews, nil

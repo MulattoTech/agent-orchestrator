@@ -118,3 +118,15 @@ UPDATE reports
 SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
     last_error = 'delivery claim recovered after daemon restart'
 WHERE delivery_state = 'claimed';
+
+-- A human can withdraw an undispatched queue item after its report batch was
+-- acknowledged as durably accepted. Restore that batch atomically with cancel.
+-- The conversation's project fences a forged/corrupt cross-project reference.
+-- name: RequeueUndispatchedReportBatch :exec
+UPDATE reports
+SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
+    acknowledged_at = NULL, available_at = min(available_at, sqlc.arg(available_at)),
+    last_error = 'accepted report context withdrawn before provider dispatch'
+WHERE delivery_state = 'acknowledged'
+  AND delivery_batch_id = sqlc.arg(delivery_batch_id)
+  AND reports.project_id = (SELECT conversations.project_id FROM conversations WHERE conversations.id = sqlc.arg(conversation_id));

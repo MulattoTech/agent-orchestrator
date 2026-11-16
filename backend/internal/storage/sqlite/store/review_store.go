@@ -577,3 +577,12 @@ func (s *Store) ArchiveReviewsBySession(ctx context.Context, workerID domain.Ses
 	defer s.writeMu.Unlock()
 	return s.qw.ArchiveReviewsBySession(ctx, gen.ArchiveReviewsBySessionParams{SessionID: workerID, UpdatedAt: now})
 }
+
+// RecordReviewPublication attaches a verified provider receipt without
+// changing the durable verdict, body, commit, or completion state.
+func (s *Store) RecordReviewPublication(ctx context.Context, id, targetSHA, reviewID string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.RecordReviewPublication(ctx, gen.RecordReviewPublicationParams{ID: id, TargetSha: targetSHA, GithubReviewID: reviewID})
+	return n > 0, err
+}

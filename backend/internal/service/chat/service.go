@@ -1438,7 +1438,15 @@ func (s *Service) Send(
 		if err != nil {
 			return domain.ConversationTurn{}, fmt.Errorf("prepare worker reports: %w", err)
 		}
-		msg.Text = reports.AppendToUserMessage(msg.Text)
+		if len(reports.Reports) > 0 {
+			// Keep authored text separate from AO's durable delivery context.
+			// The controller renders internal text only at the provider boundary.
+			msg.Content = append(msg.Content, ports.ChatContent{
+				Type: "text", Internal: true,
+				URI:  ports.ChatWorkerReportURIPrefix + reports.IdempotencyKey(),
+				Text: reports.ProviderContext(),
+			})
+		}
 	}
 	var turn domain.ConversationTurn
 	if record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil || behindAccountMove {

@@ -20,6 +20,10 @@ import (
 )
 
 type fakeReviewService struct {
+	publication      reviewsvc.PublicationResult
+	publishErr       error
+	publishedSession domain.SessionID
+	publishedRun     string
 	// triggeredHarness/config record the override the controller forwarded.
 	triggeredHarness  domain.ReviewerHarness
 	triggeredConfig   domain.AgentConfig
@@ -48,6 +52,11 @@ type fakeReviewService struct {
 	resolvePRURL      string
 	resolveCommentURL string
 	resolveErr        error
+}
+
+func (f *fakeReviewService) Publish(_ context.Context, id domain.SessionID, runID string) (reviewsvc.PublicationResult, error) {
+	f.publishedSession, f.publishedRun = id, runID
+	return f.publication, f.publishErr
 }
 
 func (*fakeReviewService) RecoverChatReviewers(context.Context) error { return nil }
