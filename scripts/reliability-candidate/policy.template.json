@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "authority_path": "C:\\AO-MTechLabs-Private-20261116\\authority\\codex-owner-inference.sqlite",
+  "native_account_sha256": "",
+  "account_key": "owner-codex-primary",
+  "authorization_epoch": "post-refresh-2026-11-21-controlled-validation",
+  "emergency_stop": true,
+  "pause": true,
+  "maximum_effort": "medium",
+  "maximum_inference": 1,
+  "maximum_per_project": 1,
+  "maximum_reviewers": 1,
+  "turn_budget": 2,
+  "reserve_turns": 1,
+  "roles": {
+    "orchestrator": { "default_model": "gpt-6-astra", "models": ["gpt-6-astra"] },
+    "implementation": { "default_model": "gpt-6-sol", "models": ["gpt-6-sol", "gpt-6.1-terra"] },
+    "complex": { "default_model": "gpt-6-astra", "models": ["gpt-6-astra"] },
+    "reviewer": { "default_model": "gpt-6-sol", "models": ["gpt-6-sol", "gpt-6.1-terra"] },
+    "lightweight": { "default_model": "gpt-6-sol", "models": ["gpt-6-sol"] }
+  },
+  "exceptions": []
+}
