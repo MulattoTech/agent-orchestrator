@@ -139,6 +139,14 @@ func (o *reliabilityObserver) observe(parent context.Context) {
 	if herr != nil {
 		codes = append(codes, "host_observation_failed")
 	}
+	handles := o.host.HandleObservation()
+	if !handles.FleetComplete {
+		codes = append(codes, "fleet_handle_coverage_unknown")
+	}
+	// Detached/recovered hosts are absent from the own-tree handle sample.
+	// Never use a partial low count as healthy expansion evidence. Its fresh
+	// lower bound may still prove excessive pressure and block admission.
+	m.ProcessHandles = handles.PressureLowerBound(now, fleetpressure.DefaultLimits(a.Limits.MaxActiveWorkers).MaxProcessHandles)
 	sessions, err := o.store.ListAllSessions(ctx)
 	if err != nil {
 		codes = append(codes, "session_observation_failed")
@@ -273,7 +281,7 @@ func (o *reliabilityObserver) snapshot(ctx context.Context) (any, error) {
 	defer o.mu.Unlock()
 	return map[string]any{"observedAt": o.at, "admission": a, "inference": q, "queue": queue, "dispatches": dispatches,
 		"sessionUsage": usage, "sessionOutcomes": outcomes, "sessionOutcomesAvailable": outcomeErr == nil,
-		"pressure": o.latest, "autoscaleEnabled": o.autoscale, "mergedPRs": o.merged, "acceptedRequirements": nil, "idleWaste": nil,
+		"pressure": o.latest, "handleObservation": o.host.HandleObservation(), "autoscaleEnabled": o.autoscale, "mergedPRs": o.merged, "acceptedRequirements": nil, "idleWaste": nil,
 		"retryAttribution": "failed dispatches measured; retry causality unavailable",
 		"workspaceScripts": o.admission.WorkspaceScriptSnapshot(), "controllerHealth": health, "projects": projectIDs, "allowanceCheckEnabled": os.Getenv("AO_ENABLE_ALLOWANCE_CHECK") == "1",
 		"receipts": o.receipts.Snapshot(), "errors": append([]string(nil), o.errors...)}, nil
