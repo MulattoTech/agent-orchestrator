@@ -137,6 +137,11 @@ $start = $asts['Start-PostRefresh-Validation.ps1']
 $starts = @($start.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start-Process' }, $true))
 if ($starts.Count -ne 1) { throw 'Post-refresh startup must launch exactly one candidate process.' }
 $startText = $sources['Start-PostRefresh-Validation.ps1']
+$releaseGuard = $startText.IndexOf('Assert-CandidateACLAncestors $bundle.Root')
+$bundleGuard = $startText.IndexOf('$bundle = Assert-CandidateBundle $PSScriptRoot')
+if ($releaseGuard -le $bundleGuard -or $releaseGuard -ge $starts[0].Extent.StartOffset) {
+    throw 'Verified release ancestry must be checked after bundle identity and before process launch.'
+}
 foreach ($guard in @('if (-not $AuthorizePostRefreshValidation)', '2026-11-21T12:30:00Z', 'Assert-CandidateBundle', 'Assert-CandidateOwnerPolicy', 'Assert-CandidateACLAncestors', 'Initialize-CandidatePrivateRoot', 'New-Item -ItemType Directory')) {
     $at = $startText.IndexOf($guard)
     if ($at -lt 0 -or $at -gt $starts[0].Extent.StartOffset) { throw "Missing pre-launch gate: $guard" }
