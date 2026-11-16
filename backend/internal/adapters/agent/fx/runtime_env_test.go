@@ -3,9 +3,9 @@ package fx
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fx/herdr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -20,7 +20,7 @@ func TestRuntimeLaunchEnvFencesHerdrIdentity(t *testing.T) {
 	env := map[string]string{"FX_MODEL": "custom-model"}
 	dataDir := t.TempDir()
 	augmenter.AugmentRuntimeLaunchEnv(env, dataDir, "mer-1", "launch-1")
-	if env["HERDR_SOCKET_PATH"] != filepath.Join(dataDir, "run", "fx-herdr.sock") {
+	if env["HERDR_SOCKET_PATH"] != herdr.SocketPath(dataDir) {
 		t.Fatalf("socket path = %q", env["HERDR_SOCKET_PATH"])
 	}
 	// Versioned, separately encoded components cannot collide on delimiters.
