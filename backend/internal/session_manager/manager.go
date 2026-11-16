@@ -7110,7 +7110,7 @@ func (m *Manager) provisionWorkspace(ctx context.Context, project domain.Project
 		// from what its cloned dependencies were installed from.
 		aoEnv = map[string]string{"AO_FORK": "1"}
 	}
-	return runPostCreate(ctx, workspacePath, project.Path, project.Config.PostCreate, project.Config.Env, aoEnv)
+	return runPostCreate(withWorkspaceScriptProject(ctx, domain.ProjectID(project.ID)), workspacePath, project.Path, project.Config.PostCreate, project.Config.Env, aoEnv)
 }
 
 // applySymlinks links each repo-relative path into the workspace. A source that
