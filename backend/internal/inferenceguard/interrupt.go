@@ -64,7 +64,7 @@ func (g *Gate) InterruptActive(ctx context.Context) error {
 
 // HardStopped distinguishes emergency/exhaustion from a soft admission pause.
 func (g *Gate) HardStopped(ctx context.Context) (bool, error) {
-	if g.blocked.Load() {
+	if g.blocked.Load() || g.policyBlocked.Load() {
 		return true, nil
 	}
 	p, err := g.current()
@@ -76,5 +76,5 @@ func (g *Gate) HardStopped(ctx context.Context) (bool, error) {
 	}
 	var status string
 	err = g.db.QueryRowContext(ctx, "SELECT status FROM authority WHERE id=1").Scan(&status)
-	return err != nil || status == "EXHAUSTED", err
+	return err != nil || (status != "UNKNOWN" && status != "AVAILABLE"), err
 }

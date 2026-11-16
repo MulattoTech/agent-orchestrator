@@ -283,7 +283,7 @@ func TestInferenceGuardStaleRootStartCannotBindPendingRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.guard.Dispatch(context.Background(), inferenceguard.Request{ID: "new-pending-request", Session: c.guardSession, Project: c.guardProject, Operation: "turn/start", Selection: sel}, func() error { return nil }); err != nil {
+	if err := c.guard.Dispatch(context.Background(), inferenceguard.Request{NativeThreadID: c.threadID, ID: "new-pending-request", Session: c.guardSession, Project: c.guardProject, Operation: "turn/start", Selection: sel}, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	c.mu.Lock()

@@ -364,7 +364,10 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		return nil, errors.New("thread/start returned no thread id")
 	}
 
-	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
+	if err := conv.startGuarded(ctx, resp.Thread.ID, resp.Model, resp.ReasoningEffort); err != nil {
+		_ = conv.Close()
+		return nil, err
+	}
 	return conv, nil
 }
 
@@ -418,7 +421,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// Neither the tier nor the collaboration mode the thread was left on is
 		// known; the next turn states both.
 		conv.tierUnknown, conv.planUnknown = true, true
-		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
+		if err := conv.startGuarded(ctx, cfg.ProviderConversationID, cfg.Model, cfg.Effort); err != nil {
+			_ = conv.Close()
+			return nil, err
+		}
 		return conv, nil
 	}
 
@@ -473,7 +479,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 			_ = conv.Terminate()
 			return nil, fmt.Errorf("%w: start in place of a missing thread: %w", ports.ErrChatResumeFailed, err)
 		}
-		conv.start(started.Thread.ID, started.Model, started.ReasoningEffort)
+		if err := conv.startGuarded(ctx, started.Thread.ID, started.Model, started.ReasoningEffort); err != nil {
+			_ = conv.Close()
+			return nil, err
+		}
 		return conv, nil
 	}
 	if err != nil {
@@ -489,7 +498,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	// thread/resume does not report the collaboration mode, and Plan sticks to
 	// the thread across a restart, so the next turn states it.
 	conv.planUnknown = true
-	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
+	if err := conv.startGuarded(ctx, cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort); err != nil {
+		_ = conv.Close()
+		return nil, err
+	}
 	return conv, nil
 }
 
@@ -927,6 +939,9 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 			return nil, fmt.Errorf("record Codex fork: %w", err)
 		}
 	}
-	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
+	if err := conv.startGuarded(ctx, resp.Thread.ID, resp.Model, resp.ReasoningEffort); err != nil {
+		_ = conv.Close()
+		return nil, err
+	}
 	return conv, nil
 }
