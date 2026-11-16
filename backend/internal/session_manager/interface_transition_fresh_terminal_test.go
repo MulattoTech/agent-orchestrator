@@ -201,3 +201,33 @@ func TestInterfaceTransitionReservedTranscriptRechecksAfterFencing(t *testing.T)
 		t.Fatalf("source stopped despite losing untouched proof: %v", *log)
 	}
 }
+
+func TestNativeTranscriptAbsenceRequiresDirectoryAncestor(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(file, []byte("retained"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		path   string
+		absent bool
+	}{
+		{"missing leaf", filepath.Join(root, "new.jsonl"), true},
+		{"missing directory chain", filepath.Join(root, "new", "deeper", "new.jsonl"), true},
+		{"existing file", file, false},
+		{"existing directory", root, false},
+		{"file ancestor", filepath.Join(file, "new.jsonl"), false},
+		{"file above missing ancestor", filepath.Join(file, "missing", "new.jsonl"), false},
+		{"relative path", "new.jsonl", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := transcriptPathDefinitelyAbsent(tc.path); got != tc.absent {
+				t.Fatalf("definitely absent=%v, want %v", got, tc.absent)
+			}
+		})
+	}
+	if content, err := os.ReadFile(file); err != nil || string(content) != "retained" {
+		t.Fatal("absence proof changed the existing file")
+	}
+}

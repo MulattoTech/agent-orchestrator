@@ -909,6 +909,30 @@ func (m *Manager) nativeConversationID(
 	return id, handoff, nil
 }
 
+// transcriptPathDefinitelyAbsent proves that a missing transcript resolves
+// below an existing directory. Windows also reports ERROR_PATH_NOT_FOUND when
+// an ancestor is a regular file, so ErrNotExist at the leaf alone is not proof
+// of an unused transcript path. Unknown parent lookups and non-directory or
+// symlink entries at the nearest existing ancestor cannot prove absence.
+func transcriptPathDefinitelyAbsent(path string) bool {
+	if !filepath.IsAbs(path) {
+		return false
+	}
+	leaf := filepath.Clean(path)
+	for candidate := leaf; ; candidate = filepath.Dir(candidate) {
+		info, err := os.Lstat(candidate)
+		if err == nil {
+			return candidate != leaf && info.IsDir() && info.Mode()&os.ModeSymlink == 0
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		if filepath.Dir(candidate) == candidate {
+			return false
+		}
+	}
+}
+
 // nativeConversationNotStarted is the only evidence that may turn a missing
 // provider history into an intentional fresh handoff. A missing file or a
 // reserved native id is not enough: both are also observable when persistence
@@ -943,10 +967,7 @@ func (m *Manager) nativeConversationNotStarted(
 		// that hint can survive a fresh switch back to Chat. Only a definitely
 		// absent absolute path can accompany the mode-specific freshness proof.
 		// Existing entries (including symlinks) and lookup errors block it.
-		if !filepath.IsAbs(path) {
-			return false
-		}
-		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		if !transcriptPathDefinitelyAbsent(path) {
 			return false
 		}
 	}
