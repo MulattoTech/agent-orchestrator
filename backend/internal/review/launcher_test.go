@@ -294,7 +294,15 @@ func TestLauncherSpawnPrependsNodeRuntimeForNodeShimReviewer(t *testing.T) {
 	// absolute path, and `env node` skips the daemon dir (which holds `ao`, not
 	// `node`) to reach the node dir behind it.
 	parts := strings.Split(rt.createCfg.Env["PATH"], string(os.PathListSeparator))
-	if len(parts) < 3 || parts[0] != filepath.Dir(exe) || parts[1] != binDir || parts[2] != nodeDir {
+	if runtime.GOOS == "windows" {
+		// Windows launchers do not use Unix NVM shebang discovery. Preserve the
+		// inherited path behind the two executable pins, without adding a Unix
+		// Node installation that the Windows launcher cannot use.
+		want := strings.Join([]string{filepath.Dir(exe), binDir, emptyPath}, string(os.PathListSeparator))
+		if got := rt.createCfg.Env["PATH"]; got != want {
+			t.Fatalf("Windows runtime PATH = %q, want %q", got, want)
+		}
+	} else if len(parts) < 3 || parts[0] != filepath.Dir(exe) || parts[1] != binDir || parts[2] != nodeDir {
 		t.Fatalf("runtime PATH = %q, want daemon dir, reviewer bin, then node dir", rt.createCfg.Env["PATH"])
 	}
 }
