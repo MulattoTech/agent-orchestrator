@@ -208,12 +208,12 @@ func TestConPTYJobRetainsExactHandleAndPrivateLifetime(t *testing.T) {
 	}
 }
 func TestConPTYJobEnvironmentPreservesWindowsValues(t *testing.T) {
-	env, err := conPTYEnvironmentBlock([]string{"Path=old", "PATH=new", "UNICODE=Î©", "=C:=C:\\work"})
+	env, err := conPTYEnvironmentBlock([]string{"Path=old", "PATH=new", "UNICODE=\u03A9", "=C:=C:\\work"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	decoded := string(utf16.Decode(env))
-	if decoded != "=C:=C:\\work\x00PATH=new\x00UNICODE=Î©\x00\x00" {
+	if decoded != "=C:=C:\\work\x00PATH=new\x00UNICODE=\u03A9\x00\x00" {
 		t.Fatalf("environment block %q", decoded)
 	}
 	for _, bad := range []string{"NO_EQUALS", "BAD=one\x00two"} {
