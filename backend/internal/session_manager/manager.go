@@ -3333,6 +3333,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 		return RestoreResult{}, m.queueRestoreAdmission(ctx, rec, err)
 	}
 	defer releaseAdmission()
+	if err := m.reserveWorkspaceOwner(ctx, rec.ID, rec.Metadata.WorkspacePath); err != nil {
+		return RestoreResult{}, err
+	}
 	if held, err := m.importHeldByLiveSession(ctx, rec); err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
 	} else if held {
@@ -4847,6 +4850,10 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		return
 	}
 	defer releaseAdmission()
+	if err := m.reserveWorkspaceOwner(ctx, rec.ID, rec.Metadata.WorkspacePath); err != nil {
+		m.logger.Warn("restore-all: workspace owner is not available; restore markers preserved", "sessionID", rec.ID, "error", err)
+		return
+	}
 	releaseWorkspaceGate := m.acquireWorkspaceGate(rec.ProjectID)
 	defer releaseWorkspaceGate()
 

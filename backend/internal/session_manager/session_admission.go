@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +22,7 @@ var (
 	ErrSessionQueued              = errors.New("SESSION_CAPACITY_QUEUED")
 	ErrOrchestratorOccupied       = errors.New("PROJECT_COORDINATOR_OCCUPIED")
 	ErrWorkspaceOwned             = errors.New("WORKSPACE_WRITE_OWNER_CONFLICT")
+	ErrWorkspaceOwnershipUnknown  = errors.New("WORKSPACE_OWNERSHIP_UNKNOWN")
 )
 
 // SessionQueuedError identifies the durable command; it does not pretend that
@@ -176,20 +175,23 @@ func (m *Manager) reserveWorkspaceOwner(ctx context.Context, id domain.SessionID
 	if m.admission.limits.MaxActiveWorkers <= 0 || strings.TrimSpace(path) == "" {
 		return nil
 	}
-	equal := func(a, b string) bool {
-		a = filepath.Clean(a)
-		b = filepath.Clean(b)
-		if runtime.GOOS == "windows" {
-			return strings.EqualFold(a, b)
-		}
-		return a == b
+	requested, err := identifyAdmissionWorkspace(path)
+	if err != nil {
+		return fmt.Errorf("%w: cannot resolve requested physical workspace: %v", ErrWorkspaceOwnershipUnknown, err)
 	}
 	rows, err := m.store.ListAllSessions(ctx)
 	if err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if row.ID != id && !row.IsTerminated && !row.IsTaskPreparation && row.Metadata.WorkspacePath != "" && equal(path, row.Metadata.WorkspacePath) {
+		if row.ID == id || row.IsTerminated || row.IsTaskPreparation || row.Metadata.WorkspacePath == "" {
+			continue
+		}
+		owner, err := identifyAdmissionWorkspace(row.Metadata.WorkspacePath)
+		if err != nil {
+			return fmt.Errorf("%w: cannot resolve session %s workspace: %v", ErrWorkspaceOwnershipUnknown, row.ID, err)
+		}
+		if sameAdmissionWorkspace(requested, owner) {
 			return fmt.Errorf("%w: %s", ErrWorkspaceOwned, row.ID)
 		}
 	}
@@ -198,7 +200,14 @@ func (m *Manager) reserveWorkspaceOwner(ctx context.Context, id domain.SessionID
 		own = value.reservation
 	}
 	for r := range m.admission.reservations {
-		if r != own && r.workspace != "" && equal(r.workspace, path) {
+		if r == own || r.workspace == "" {
+			continue
+		}
+		owner, err := identifyAdmissionWorkspace(r.workspace)
+		if err != nil {
+			return fmt.Errorf("%w: cannot resolve reserved workspace: %v", ErrWorkspaceOwnershipUnknown, err)
+		}
+		if sameAdmissionWorkspace(requested, owner) {
 			return ErrWorkspaceOwned
 		}
 	}

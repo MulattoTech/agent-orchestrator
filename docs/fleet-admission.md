@@ -124,3 +124,10 @@ episode counter. Renaming or reconciling metadata while a restore waits does not
 invalidate it. An intervening restore followed by a new archive changes that
 generation, so the earlier queued restore blocks instead of reviving work the
 owner subsequently stopped.
+
+Workspace owner comparison resolves existing filesystem ancestors and checks
+native directory/file identity, including Windows junctions and case aliases.
+A future directory beneath an alias is fenced by its existing ancestor identity
+plus relative suffix. Unreadable, cyclic or dangling alias identity refuses
+admission with WORKSPACE_OWNERSHIP_UNKNOWN. Restore checks ownership before
+workspace mutation as well as immediately before controller launch.
