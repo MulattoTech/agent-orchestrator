@@ -1183,14 +1183,14 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 
 	// Stage all tracked and non-ignored untracked files into the temp index.
 	// GIT_INDEX_FILE overrides the index so the real index is never touched.
-	addCmd := aoprocess.CommandContext(ctx, w.binary, addAllTempIndexArgs(path)...)
+	addCmd := aoprocess.CommandContext(ctx, w.binary, platformGitArgs(addAllTempIndexArgs(path))...)
 	addCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return "", commandError{args: append([]string{w.binary}, addAllTempIndexArgs(path)...), output: string(out), err: err}
 	}
 
 	// Write the staged tree to get a tree SHA.
-	writeTreeCmd := aoprocess.CommandContext(ctx, w.binary, writeTreeArgs(path)...)
+	writeTreeCmd := aoprocess.CommandContext(ctx, w.binary, platformGitArgs(writeTreeArgs(path))...)
 	writeTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
 	treeOut, err := writeTreeCmd.CombinedOutput()
 	if err != nil {
@@ -1462,7 +1462,7 @@ func parseObservedWorkspaceCommits(output string) []ports.WorkspaceCommit {
 // returned commandError. Exit code detection happens in the caller.
 func (w *Workspace) runCherryPickNoCommit(ctx context.Context, worktree, commitSHA string) error {
 	args := cherryPickNoCommitArgs(worktree, commitSHA)
-	cmd := aoprocess.CommandContext(ctx, w.binary, args...)
+	cmd := aoprocess.CommandContext(ctx, w.binary, platformGitArgs(args)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return commandError{args: append([]string{w.binary}, args...), output: string(out), err: err}
@@ -1701,8 +1701,11 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 			return "", err
 		}
 		baseRef = refs.baseRef
-		if err := w.addNewBranchWorktree(ctx, repo, branch, path, refs.seedRef, force); err != nil {
-			return "", fmt.Errorf("gitworktree: worktree add branch %q from %q: %w", branch, refs.seedRef, err)
+		// StartRef is an explicit checkout seed even when the comparison base
+		// needs resolving. Do not silently replace an imported commit.
+		seedRef = firstNonEmpty(seedRef, refs.seedRef)
+		if err := w.addNewBranchWorktree(ctx, repo, branch, path, seedRef, force); err != nil {
+			return "", fmt.Errorf("gitworktree: worktree add branch %q from %q: %w", branch, seedRef, err)
 		}
 		return baseRef, nil
 	}
@@ -2307,13 +2310,13 @@ func (w *Workspace) enableWorktreeConfig(ctx context.Context, repo string) error
 		return fmt.Errorf("gitworktree: inspect repository metadata: %w", err)
 	}
 	args := []string{"-C", repo, "config", "extensions.worktreeConfig", "true"}
-	cmd := aoprocess.CommandContext(ctx, w.binary, args...)
+	cmd := aoprocess.CommandContext(ctx, w.binary, platformGitArgs(args)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("gitworktree: enable per-worktree config: %w", commandError{
 			args: append([]string{w.binary}, args...), output: string(out), err: err,
 		})
 	}
-	return nil
+	return configurePlatformLongPaths(ctx, w.binary, repo)
 }
 
 func physicalAbs(path string) (string, error) {
@@ -2561,7 +2564,7 @@ func movePathAside(path, suffix string) (string, error) {
 }
 
 func runCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
-	cmd := aoprocess.CommandContext(ctx, binary, args...)
+	cmd := aoprocess.CommandContext(ctx, binary, platformGitArgs(args)...)
 	cmd.Env = os.Environ()
 	if readsGitMessages(args) {
 		cmd.Env = untranslatedGitEnv(cmd.Env)
