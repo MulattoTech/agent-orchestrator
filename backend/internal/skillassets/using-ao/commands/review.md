@@ -69,6 +69,7 @@ ao review submit [worker-session-id] [flags]
 | `--body string` | Review body: a path to a Markdown file, or `-` to read from stdin | - |
 | `--review-id string` | Id of the GitHub PR review just posted (the `.id` from the `gh api` POST that created the review) | - |
 | `--reviews string` | JSON review results array or object: a path, or `-` to read from stdin | - |
+| `--reviews-json string` | JSON review results passed directly as one argument, without a shell pipeline or file | - |
 | `--run string` | Review run id | Required |
 | `--session string` | Worker session id (or pass it as the positional argument) | - |
 | `--verdict string` | Review verdict: `approved` or `changes_requested` | Required |
@@ -90,6 +91,58 @@ ao review submit mer-3 --run review-run-1 --verdict approved
 # Submit a changes-requested review with a body from stdin
 echo "Please fix the null check on line 42." | ao review submit --session mer-3 --run review-run-1 --verdict changes_requested --body -
 ```
+
+---
+
+### ao review publish
+
+Publish or verify the body of a saved complete review without starting a reviewer
+or making any model request. Use this when a valid local result exists but GitHub
+publication failed. Failed runs without a saved verdict/body cannot be replayed.
+
+**Syntax:**
+
+```text
+ao review publish [worker-session-id] --run <saved-run-id> [--json]
+```
+
+The daemon verifies the current PR head and publishes with the immutable reviewed
+commit as `commit_id`. It searches for the stable run/body marker before posting,
+so a lost response or a crash before receipt persistence can be reconciled.
+An existing receipt is verified rather than posted again. Concurrent requests for
+one run are serialized. The saved verdict, Markdown, and commit never change.
+
+The result reports AO's verdict and GitHub's actual review state separately.
+`COMMENTED` is a published comment review; it is not GitHub branch approval.
+This replay publishes the saved Markdown body. It cannot reconstruct inline
+comments that were never durably recorded, and it refuses to publish against an
+advanced PR head. Use the original inline-publication path when line-specific
+worker feedback is required.
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--run string` | Saved complete review run id | Required |
+| `--session string` | Worker session id (or pass it positionally) | Current session |
+| `--json` | Output the verified receipt and actual provider state | - |
+
+**Example:**
+
+```text
+ao review publish mer-3 --run review-run-1 --json
+```
+
+On Windows, the reviewer can save its result before any external publication using
+native argument transport:
+
+```powershell
+ao review submit --session mer-3 --reviews-json '{"reviews":[{"runId":"review-run-1","verdict":"approved","body":"Full saved review."}]}'
+```
+
+Double apostrophes inside PowerShell single-quoted JSON. Do not use Bash, WSL, or
+`printf` to transport this result. Save the full Markdown before publishing, then
+attach the verified provider review id with the same immutable verdict and body.
 
 ---
 

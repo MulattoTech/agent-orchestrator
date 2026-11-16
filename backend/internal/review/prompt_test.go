@@ -18,7 +18,7 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 		{RunID: "run-2", PRURL: "https://github.com/o/r/pull/2", TargetSHA: "sha2"},
 	}
 
-	prompt, _ := reviewTexts(spec)
+	prompt, _ := reviewTextsForShell(spec, false)
 	for _, want := range []string{
 		"AO created 2 review tasks",
 		"Review every queued PR, then submit all results together",
@@ -43,7 +43,7 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 // comments, each forwarded as a required change. Required findings must be
 // inline, and optional suggestions must not be.
 func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
-	prompt, system := reviewTexts(LaunchSpec{WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", RunID: "run-1"})
+	prompt, system := reviewTextsForShell(LaunchSpec{WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", RunID: "run-1"}, false)
 	if !strings.Contains(prompt, "implementation pull request(s) owned by worker session mer-1") || !strings.Contains(system, "implementation PRs owned by a worker") {
 		t.Fatalf("native review prompts must identify their owned implementation scope:\n%s\n%s", prompt, system)
 	}
@@ -63,5 +63,29 @@ func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
 	}
 	if strings.Contains(prompt, "omit the field for a review with no inline comments") {
 		t.Fatalf("review prompt still makes inline comments optional:\n%s", prompt)
+	}
+}
+
+func TestReviewPromptSavesBeforePublishingAndPinsCommitOnWindows(t *testing.T) {
+	spec := LaunchSpec{WorkerID: "worker-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "full-commit", RunID: "run-1"}
+	for _, powershell := range []bool{false, true} {
+		prompt, _ := reviewTextsForShell(spec, powershell)
+		save := strings.Index(prompt, "ao review submit")
+		publish := strings.Index(prompt, "| gh api")
+		if save < 0 || publish < 0 || save > publish {
+			t.Fatal("publication precedes durable result")
+		}
+		if !strings.Contains(prompt, `"commit_id": "<exact-head-commit-from-queue>"`) {
+			t.Fatal("publication lost commit binding")
+		}
+		if !strings.Contains(prompt, "COMMENT review is publication, not a GitHub approval") {
+			t.Fatal("publication conflates approval")
+		}
+		if powershell && strings.Contains(prompt, "printf '%s'") {
+			t.Fatal("Windows prompt invokes unavailable printf")
+		}
+		if powershell && (!strings.Contains(prompt, "--reviews-json") || strings.Contains(prompt, "| ao review submit")) {
+			t.Fatal("Windows submit still needs a shell pipe")
+		}
 	}
 }

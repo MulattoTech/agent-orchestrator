@@ -98,6 +98,13 @@ type SubmitReviewInput struct {
 	Reviews        []SubmitReviewItem `json:"reviews,omitempty" description:"Batched review results recorded by one reviewer CLI command."`
 }
 
+// PublishReviewInput replays the saved body without starting model inference.
+type PublishReviewResponse = reviewsvc.PublicationResult
+
+type PublishReviewInput struct {
+	RunID string `json:"runId" description:"Saved complete review run to publish or verify."`
+}
+
 // ReviewsController owns the session-scoped /reviews routes. A nil Svc returns 501.
 type ReviewsController struct {
 	Svc reviewsvc.Manager
@@ -115,6 +122,7 @@ func (c *ReviewsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/reviews/restore", c.restore)
 	r.Post("/sessions/{sessionId}/reviews/switch", c.switchReviewer)
 	r.Post("/sessions/{sessionId}/reviews/submit", c.submit)
+	r.Post("/sessions/{sessionId}/reviews/publish", c.publish)
 }
 
 func (c *ReviewsController) activity(w http.ResponseWriter, r *http.Request) {
@@ -429,6 +437,24 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, ReviewRunResponse{Review: first, Reviews: runs})
 }
 
+func (c *ReviewsController) publish(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/reviews/publish")
+		return
+	}
+	var in PublishReviewInput
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_BODY", "Invalid request body", nil)
+		return
+	}
+	result, err := c.Svc.Publish(r.Context(), sessionID(r), strings.TrimSpace(in.RunID))
+	if err != nil {
+		writeReviewError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
 func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, reviewsvc.ErrInvalid):
@@ -443,6 +469,8 @@ func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_PR_OWNED_BY_OTHER_SESSION", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrAgentBinaryNotFound):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEWER_BINARY_NOT_FOUND", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrConflict):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_PUBLICATION_CONFLICT", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatAuthRequired):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEWER_AUTH_REQUIRED", "The reviewer agent is installed but not authenticated", nil)
 	default:

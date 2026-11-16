@@ -233,3 +233,13 @@ WHERE status = 'running' AND verdict = '' AND batch_id != ''
 -- name: ArchiveReviewsBySession :exec
 UPDATE review SET is_archived = TRUE, reviewer_handle_id = '', reviewer_launch_id = '',
     controller_generation = '', reviewer_activity_state = 'exited', updated_at = ? WHERE session_id = ?;
+
+-- A late publication receipt may fill an empty field but may not replace an
+-- existing receipt, the verdict, the body, or the reviewed commit.
+-- name: RecordReviewPublication :execrows
+UPDATE review_run SET github_review_id = sqlc.arg(github_review_id)
+WHERE id = sqlc.arg(id)
+  AND target_sha = sqlc.arg(target_sha)
+  AND status IN ('complete', 'delivered')
+  AND verdict IN ('approved', 'changes_requested')
+  AND (github_review_id = '' OR github_review_id = sqlc.arg(github_review_id));
