@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -102,7 +103,8 @@ type Service struct {
 	readinessWarm     chan struct{}
 	readinessWarmOnce sync.Once
 	// modelGate adjusts every catalog read; see ModelGate.
-	modelGate ModelGate
+	modelGate                    ModelGate
+	usesCustomCodexModelProvider func() bool
 }
 
 // ModelGate adjusts a catalog for facts that change independently of model
@@ -130,6 +132,9 @@ type Deps struct {
 	Clock func() time.Time
 	// ModelGate is applied to every catalog Models and ModelCatalog return. Optional.
 	ModelGate ModelGate
+	// UsesCustomCodexModelProvider isolates native-home configuration reads.
+	// The production constructor defaults to the shipped Codex adapter.
+	UsesCustomCodexModelProvider func() bool
 }
 
 // SessionUsageLookup provides durable session facts used to rank agent choices.
@@ -146,7 +151,10 @@ func New() *Service {
 // NewWithDeps returns the production service with in-memory readiness and a
 // durable model-catalog cache.
 func NewWithDeps(deps Deps) *Service {
-	agents := agentregistry.Harnessed()
+	return newWithHarnessFactory(deps, agentregistry.Harnessed(), agentregistry.Harnessed)
+}
+
+func newWithHarnessFactory(deps Deps, agents []agentregistry.HarnessAgent, factory HarnessFactory) *Service {
 	svc := newService(agents, deps.Cache, deps.Discoverer)
 	svc.modelDiscoveryDir = deps.ModelDiscoveryDir
 	svc.dataDir = deps.DataDir
@@ -155,6 +163,9 @@ func NewWithDeps(deps Deps) *Service {
 		svc.logger = deps.Logger
 	}
 	svc.modelGate = deps.ModelGate
+	if deps.UsesCustomCodexModelProvider != nil {
+		svc.usesCustomCodexModelProvider = deps.UsesCustomCodexModelProvider
+	}
 	if deps.CodexAccountRoot != "" && deps.CodexGlobalHome != "" {
 		svc.codexAccounts = newCodexAccountManager(deps.Context, deps.CodexAccountRoot, deps.CodexPendingRoot, deps.CodexSwitchStagingRoot, deps.CodexGlobalHome, deps.CodexAccounts, deps.Logger, deps.CodexOperationGate)
 		svc.codexAccounts.resolveBinary = func(ctx context.Context) (string, error) {
@@ -165,7 +176,7 @@ func NewWithDeps(deps Deps) *Service {
 		}
 	}
 	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
-		Agents: agents, Factory: agentregistry.Harnessed, Context: deps.Context, Logger: deps.Logger,
+		Agents: agents, Factory: factory, Context: deps.Context, Logger: deps.Logger,
 		DataDir:             deps.DataDir,
 		AuthenticationCheck: svc.authenticationWithAccount,
 		// A catalog built while the agent was signed out carries that failure
@@ -207,7 +218,7 @@ func newService(agents []agentregistry.HarnessAgent, cache ports.AgentModelCatal
 	for _, item := range agents {
 		resolverMu[string(item.Harness)] = &sync.Mutex{}
 	}
-	return &Service{agents: agents, readiness: newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents}), cache: cache, discoverer: discoverer, resolverMu: resolverMu, modelCalls: map[string]*modelCatalogCall{}, modelGeneration: map[string]int64{}, discoverySlots: make(chan struct{}, 2), ctx: context.Background(), now: time.Now, logger: slog.Default()}
+	return &Service{agents: agents, readiness: newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents}), cache: cache, discoverer: discoverer, resolverMu: resolverMu, modelCalls: map[string]*modelCatalogCall{}, modelGeneration: map[string]int64{}, discoverySlots: make(chan struct{}, 2), ctx: context.Background(), now: time.Now, logger: slog.Default(), usesCustomCodexModelProvider: codexagent.UsesCustomModelProvider}
 }
 
 // WarmModelCatalogs starts the bounded cache scheduler. Readiness is never held
