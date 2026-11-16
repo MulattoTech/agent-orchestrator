@@ -318,3 +318,72 @@ func TestInferenceGuardInternalRPCErrorKeepsUncertainLease(t *testing.T) {
 		t.Fatalf("unknown outcome freed lease: %+v %v", s, err)
 	}
 }
+
+func TestInferenceGuardSecondRequestCannotOverwriteActiveStopper(t *testing.T) {
+	d, srv, cfg := guardedDriver(t)
+	conv, err := d.Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "first", ClientMessageID: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	c := conv.(*conversation)
+	c.mu.Lock()
+	firstID, firstTurn := c.guardRequest, c.guardTurn
+	c.mu.Unlock()
+	if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "second", ClientMessageID: "second"}); !errors.Is(err, inferenceguard.ErrCapacity) {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	currentID, currentTurn := c.guardRequest, c.guardTurn
+	c.mu.Unlock()
+	if currentID != firstID || currentTurn != firstTurn || currentTurn == "" {
+		t.Fatalf("lost active stopper: %s %s", currentID, currentTurn)
+	}
+	srv.mu.Lock()
+	writes := 0
+	for _, f := range srv.seen {
+		if f.Method == "turn/start" {
+			writes++
+		}
+	}
+	srv.mu.Unlock()
+	if writes != 1 {
+		t.Fatalf("wire writes=%d", writes)
+	}
+}
+func TestInferenceGuardCompletionBeforeAcknowledgementSettlesOnlyExactTurn(t *testing.T) {
+	d, srv, cfg := guardedDriver(t)
+	srv.mu.Lock()
+	delete(srv.responses, "turn/start")
+	srv.mu.Unlock()
+	conv, err := d.Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	c := conv.(*conversation)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, e := conv.SendTurn(ctx, ports.ChatUserMessage{Text: "fast synthetic work", ClientMessageID: "fast"})
+		done <- e
+	}()
+	f := srv.awaitFrame(func(f frame) bool { return f.Method == "turn/start" })
+	c.observeGuardEvent(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderConversationID: "thread-1", ProviderTurnID: "fast-native-turn", TurnState: domain.TurnStateCompleted})
+	s, e := c.guard.Snapshot(ctx)
+	if e != nil || s.Active != 1 {
+		t.Fatalf("unacknowledged completion freed capacity: %+v %v", s, e)
+	}
+	srv.push("{\"id\":" + string(*f.ID) + ",\"result\":{\"turn\":{\"id\":\"fast-native-turn\"}}}")
+	if e := <-done; e != nil {
+		t.Fatal(e)
+	}
+	s, e = c.guard.Snapshot(ctx)
+	if e != nil || s.Completed != 1 || s.Active != 0 {
+		t.Fatalf("exact acknowledged completion not reconciled: %+v %v", s, e)
+	}
+}

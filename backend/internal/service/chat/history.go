@@ -332,6 +332,7 @@ func (s *Service) EditMessage(
 					err = prepareErr
 				} else {
 					provider, err = driver.Resume(operationCtx, ports.ChatResumeConfig{
+						PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 						SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
 						DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 						Model: cfg.Model, Effort: cfg.Effort,
@@ -372,6 +373,7 @@ func (s *Service) EditMessage(
 				err = prepareErr
 			} else {
 				provider, err = driver.Start(operationCtx, ports.ChatStartConfig{
+					PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 					SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 					Env: launchEnv, Model: cfg.Model, Effort: cfg.Effort,
 					Permissions:  cfg.Permissions,
@@ -950,6 +952,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 		return "", err
 	}
 	provider, err := driver.Resume(operationCtx, ports.ChatResumeConfig{
+		PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 		SessionID: cfg.SessionID, ProviderConversationID: branch.ProviderConversationID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 		Model: cfg.Model, Effort: cfg.Effort,
@@ -1060,6 +1063,7 @@ func (s *Service) restoreClosedSourceController(
 	conversation := source.conversation
 	conversation.Settings = source.Settings()
 	provider, err := driver.Resume(recoveryCtx, ports.ChatResumeConfig{
+		PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 		SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
 		// A branch whose agent never answered may have no native session to resume.
 		FreshIfMissing: s.branchUnanswered(recoveryCtx, id, conversation.ID, branch),
