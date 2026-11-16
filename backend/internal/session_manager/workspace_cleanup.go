@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"os/exec"
@@ -205,11 +206,19 @@ func (o *cleanupOutput) Write(p []byte) (int, error) {
 // Cleanup facts already have CDC triggers, so completion also refreshes the UI.
 // reportOnly applies to a generation's first record only: a later retry keeps
 // whether an archive or a sweep started the cleanup.
+const workspaceCleanupAttemptLimit = 2 // first attempt plus one automatic retry
+
 func (m *Manager) recordWorkspaceCleanup(ctx context.Context, rec domain.SessionRecord, disposition domain.WorkspaceDisposition, code string, reportOnly bool) error {
+	return m.recordWorkspaceCleanupAttempt(ctx, rec, disposition, code, reportOnly, true)
+}
+
+// Starting and completing a cleanup are separate facts for the same attempt.
+// A deferred result must not count the attempt a second time.
+func (m *Manager) recordWorkspaceCleanupAttempt(ctx context.Context, rec domain.SessionRecord, disposition domain.WorkspaceDisposition, code string, reportOnly, startAttempt bool) error {
 	// Record cancellation too, while shutdown is draining background workers.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalIntentBudget)
 	defer cancel()
-	now := time.Now().UTC()
+	now := m.clock().UTC()
 	facts, ok, err := m.store.GetSessionCleanupFacts(ctx, rec.ID)
 	if err != nil {
 		return err
@@ -217,12 +226,21 @@ func (m *Manager) recordWorkspaceCleanup(ctx context.Context, rec domain.Session
 	if !ok || facts.SessionGeneration != rec.CleanupGeneration {
 		facts = domain.SessionCleanupRecord{SessionID: rec.ID, SessionGeneration: rec.CleanupGeneration, RuntimeReleasedAt: now, ReportOnly: reportOnly}
 	}
-	if disposition == domain.DispositionPending {
+	if (startAttempt && disposition == domain.DispositionPending) || (!startAttempt && facts.AttemptCount == 0) {
 		facts.AttemptCount++
 		facts.LastAttemptAt = now
 	}
-	facts.WorkspaceDisposition, facts.FailureCode = disposition, code
 	facts.NextAttemptAt = time.Time{}
+	if disposition == domain.DispositionPending && !startAttempt {
+		if facts.AttemptCount >= workspaceCleanupAttemptLimit {
+			disposition, code = domain.DispositionFailed, "WORKSPACE_RETRY_EXHAUSTED"
+		} else {
+			jitter := fnv.New32a()
+			_, _ = jitter.Write([]byte(string(rec.ID)))
+			facts.NextAttemptAt = now.Add(5*time.Second + time.Duration(jitter.Sum32()%2000)*time.Millisecond)
+		}
+	}
+	facts.WorkspaceDisposition, facts.FailureCode = disposition, code
 	return m.store.UpsertSessionCleanupFacts(ctx, facts)
 }
 
@@ -237,7 +255,7 @@ func (m *Manager) recordWorkspaceCleanupResult(ctx context.Context, rec domain.S
 	case refusal.refused():
 		disposition, code = domain.DispositionFailed, "WORKSPACE_CLEANUP_FAILED"
 	}
-	return m.recordWorkspaceCleanup(ctx, rec, disposition, code, reportOnly)
+	return m.recordWorkspaceCleanupAttempt(ctx, rec, disposition, code, reportOnly, false)
 }
 
 // cleanupRefusal is why cleanup left a workspace alone this run. The zero
@@ -373,6 +391,12 @@ func (m *Manager) reconcileWorkspaceCleanup(ctx context.Context, id domain.Sessi
 		return err
 	}
 	if found && facts.SessionGeneration == rec.CleanupGeneration && facts.WorkspaceDisposition == domain.DispositionPending {
+		if facts.AttemptCount >= workspaceCleanupAttemptLimit {
+			return m.recordWorkspaceCleanup(ctx, rec, domain.DispositionFailed, "WORKSPACE_RETRY_EXHAUSTED", facts.ReportOnly)
+		}
+		if facts.NextAttemptAt.After(m.clock()) {
+			return nil
+		}
 		return m.resumeAcceptedCleanup(ctx, rec)
 	}
 	// Sessions this pass leaves alone are decided before taking the operation
