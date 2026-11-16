@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -512,5 +513,84 @@ func TestFortyHeldHumanMessagesAndReportSurviveControllerCrashRestart(t *testing
 		if _, err := h.st.TurnByID(ctx, id); err != nil {
 			t.Fatalf("original human turn disappeared: %s %v", id, err)
 		}
+	}
+}
+
+type guardedUncertainReportConversation struct {
+	*fakeConversation
+	gate    *inferenceguard.Gate
+	request inferenceguard.Request
+}
+
+func (c *guardedUncertainReportConversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	err := c.gate.Dispatch(ctx, c.request, func() error {
+		if _, err := c.fakeConversation.SendTurn(ctx, msg); err != nil {
+			return err
+		}
+		return errors.New("synthetic provider accepted write; response lost")
+	})
+	return ports.ChatTurnRef{}, err
+}
+
+func TestUncertainReportKeepsGlobalAdmissionLeaseAfterRecovery(t *testing.T) {
+	provider := &guardedUncertainReportConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, provider)
+	h.conv = provider.fakeConversation
+	policy := inferenceguard.Policy{
+		Version: 1, AccountKey: "synthetic-account", AuthorizationEpoch: "synthetic-window",
+		MaximumEffort: "medium", MaximumInference: 2, MaximumPerProject: 2, MaximumReviewers: 1,
+		TurnBudget: 10, ReserveTurns: 1, Roles: map[string]inferenceguard.RolePolicy{},
+	}
+	for _, role := range []string{"orchestrator", "implementation", "complex", "reviewer", "lightweight"} {
+		policy.Roles[role] = inferenceguard.RolePolicy{DefaultModel: "synthetic-model", Models: []string{"synthetic-model"}}
+	}
+	path := filepath.Join(t.TempDir(), "admission.db")
+	loader := func() (inferenceguard.Policy, error) { return policy, nil }
+	gate, err := inferenceguard.Open(path, loader, h.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = gate.Close() }()
+	selection, err := gate.Resolve("orchestrator", string(testSession), "synthetic-model", "medium")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.gate = gate
+	provider.request = inferenceguard.Request{ID: "synthetic-report-dispatch", Session: string(testSession), Project: string(testProject), Operation: "turn/start", Selection: selection}
+	seedPiggybackReport(t, h, "lease-report")
+	ctx := context.Background()
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "preserve uncertain admission", ClientMessageID: "lease-human"})
+	if !errors.Is(err, inferenceguard.ErrUncertain) || turn.State != domain.TurnStateFailed {
+		t.Fatalf("turn=%+v %v", turn, err)
+	}
+	snapshot, err := gate.Snapshot(ctx)
+	if err != nil || snapshot.Uncertain != 1 || len(provider.sentMessages()) != 1 {
+		t.Fatalf("lost uncertain lease: %+v %v", snapshot, err)
+	}
+	report, _, _ := h.st.GetReport(ctx, "lease-report")
+	if report.DeliveryState != domain.ReportAcknowledged {
+		t.Fatalf("batch released after unknown write: %+v", report)
+	}
+	if err := gate.Close(); err != nil {
+		t.Fatal(err)
+	}
+	gate, err = inferenceguard.Open(path, loader, h.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.gate = gate
+	svc, resumed := restartReportService(t, h)
+	if err := svc.DrainQueued(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if len(resumed.sentMessages()) != 0 {
+		t.Fatal("restart resent an uncertain report")
+	}
+	if err := gate.Dispatch(ctx, provider.request, func() error { t.Fatal("duplicate uncertain request crossed provider boundary"); return nil }); !errors.Is(err, inferenceguard.ErrUncertain) {
+		t.Fatal(err)
+	}
+	snapshot, err = gate.Snapshot(ctx)
+	if err != nil || snapshot.Uncertain != 1 {
+		t.Fatalf("recovery released uncertain admission: %+v %v", snapshot, err)
 	}
 }
