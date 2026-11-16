@@ -31,7 +31,7 @@ try {
     $builtAt = [DateTimeOffset]::UtcNow
     $stamp = $builtAt.ToString('yyyyMMddTHHmmssZ')
     $candidateName = "ao-unofficial-$stamp-$($sourceCommit.Substring(0,12))"
-    $releaseParent = Get-CandidateLocalPath 'C:\AODev\releases'
+    $releaseParent = Initialize-CandidateReleaseRoot
     $releaseDir = Join-Path $releaseParent $candidateName
     if (Test-Path -LiteralPath $releaseDir) { throw 'Release directory already exists; existing artifacts will not be overwritten.' }
     New-Item -ItemType Directory -Path $releaseDir -ErrorAction Stop | Out-Null

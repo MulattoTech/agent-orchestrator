@@ -27,9 +27,9 @@ function Get-CandidateLocalPath {
 function Assert-CandidateBundle {
     param([Parameter(Mandatory)][string]$Root)
     $rootPath = Get-CandidateLocalPath $Root
-    if (-not $rootPath.StartsWith('C:\AODev\releases\', [StringComparison]::OrdinalIgnoreCase) -or
+    if (-not $rootPath.StartsWith('C:\AO-MTechLabs-Releases-20261116\', [StringComparison]::OrdinalIgnoreCase) -or
         [IO.Path]::GetFileName($rootPath) -notmatch '^ao-unofficial-\d{8}T\d{6}Z-[0-9a-f]{12}$') {
-        throw 'Candidate must be a timestamped commit directory under C:\AODev\releases.'
+        throw 'Candidate must be a timestamped commit directory under C:\AO-MTechLabs-Releases-20261116.'
     }
     $manifestPath = Join-Path $rootPath 'manifest.json'
     $expected = (Get-Content -LiteralPath (Join-Path $rootPath 'manifest.sha256') -Raw).Trim()
@@ -142,6 +142,41 @@ function Assert-CandidateACLAncestors {
         if ($parent -eq $check) { break }
         $check = $parent
     }
+}
+
+function Initialize-CandidateReleaseRoot {
+    $root = Get-CandidateLocalPath 'C:\AO-MTechLabs-Releases-20261116'
+    Assert-CandidateACLAncestors 'C:\'
+    if (Test-Path -LiteralPath $root) {
+        $acl = Assert-CandidateACL $root -Private -CurrentOwner
+        if (-not $acl.AreAccessRulesProtected) {
+            throw 'Existing candidate release root is not private and protected; no ACL changes were made.'
+        }
+        Assert-CandidateACLAncestors $root
+        return $root
+    }
+    New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+    $acl = Get-Acl -LiteralPath $root -ErrorAction Stop
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $sid.Value) {
+        throw 'New candidate release root owner differs; no ACL change was attempted.'
+    }
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
+    foreach ($principal in @($sid.Value, 'S-1-5-18', 'S-1-5-32-544')) {
+        $entry = [Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new($principal),
+            [Security.AccessControl.FileSystemRights]::FullControl,
+            [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',
+            [Security.AccessControl.PropagationFlags]::None,
+            [Security.AccessControl.AccessControlType]::Allow)
+        $acl.AddAccessRule($entry)
+    }
+    Set-Acl -LiteralPath $root -AclObject $acl -ErrorAction Stop
+    $verified = Assert-CandidateACL $root -Private -CurrentOwner
+    if (-not $verified.AreAccessRulesProtected) { throw 'Release root DACL protection failed.' }
+    Assert-CandidateACLAncestors $root
+    return $root
 }
 
 function Initialize-CandidatePrivateRoot {

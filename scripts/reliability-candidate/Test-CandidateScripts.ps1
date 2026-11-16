@@ -19,6 +19,17 @@ foreach ($file in Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File
         }
     }
 }
+$commonText = $sources['Candidate.Common.ps1']
+if (-not $commonText.Contains('function Initialize-CandidateReleaseRoot') -or
+    -not $commonText.Contains('SetAccessRuleProtection') -or
+    -not $commonText.Contains('Assert-CandidateACLAncestors $root') -or
+    -not $commonText.Contains('C:\AO-MTechLabs-Releases-20261116') -or
+    $commonText.Contains('C:\AODev\releases')) {
+    throw 'Candidate release root must be protected, verified and independent of AODev.'
+}
+if (-not $sources['Build-Candidate.ps1'].Contains('$releaseParent = Initialize-CandidateReleaseRoot')) {
+    throw 'Build must initialize the private release root before compilation.'
+}
 $build = $asts['Build-Candidate.ps1']
 $goCalls = @($build.FindAll({
     param($n)
@@ -209,8 +220,8 @@ $aclWrites = @($asts['Candidate.Common.ps1'].FindAll({
     param($n)
     $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Set-Acl'
 }, $true))
-if ($aclWrites.Count -ne 1 -or $aclWrites[0].Extent.Text -notmatch '-LiteralPath \$root -AclObject \$acl') {
-    throw 'Only the freshly created candidate root DACL may be modified.'
+if ($aclWrites.Count -ne 2 -or @($aclWrites | Where-Object { $_.Extent.Text -notmatch '-LiteralPath \$root -AclObject \$acl' }).Count -ne 0) {
+    throw 'Only the newly created release and candidate private-root DACLs may be modified.'
 }
 $policy = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'policy.template.json') -Raw | ConvertFrom-Json -AsHashtable
 if ($policy.native_account_sha256 -ne '' -or -not $policy.emergency_stop -or -not $policy.pause -or
