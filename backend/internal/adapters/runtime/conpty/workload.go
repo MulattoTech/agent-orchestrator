@@ -32,7 +32,7 @@ func (r *Runtime) RunningWorkloadCommands(ctx context.Context, handle ports.Runt
 	if string(ref.SessionID) != handle.ID {
 		return 0, errors.New("conpty: supervisor session does not match the runtime handle")
 	}
-	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	sess, err := r.resolveOwned(ctx, handle.ID)
 	if err != nil {
 		return 0, fmt.Errorf("conpty: resolve runtime %q: %w", handle.ID, err)
 	}

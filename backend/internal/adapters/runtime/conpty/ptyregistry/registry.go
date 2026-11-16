@@ -10,16 +10,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 )
 
 // Entry is one registered pty-host process.
 type Entry struct {
-	SessionID    string `json:"sessionId"`
-	PtyHostPID   int    `json:"ptyHostPid"`
-	PipePath     string `json:"pipePath"`
-	LaunchID     string `json:"launchId,omitempty"`
-	RegisteredAt string `json:"registeredAt"` // RFC3339; set by caller
+	SessionID     string `json:"sessionId"`
+	PtyHostPID    int    `json:"ptyHostPid"`
+	PipePath      string `json:"pipePath"`
+	LaunchID      string `json:"launchId,omitempty"`
+	HostLaunchID  string `json:"hostLaunchId,omitempty"`
+	HostCreatedAt string `json:"hostCreatedAt,omitempty"`
+	RegisteredAt  string `json:"registeredAt"` // RFC3339; set by caller
 }
 
 // pidAlive is the PID-liveness probe. Tests replace it with a fake.
@@ -289,7 +292,13 @@ func scanLocked(ctx context.Context) (entries []Entry, complete bool, err error)
 		if err := ctx.Err(); err != nil {
 			return live, false, err
 		}
-		if e.PtyHostPID == 0 && e.PipePath == UnresolvedPipePath {
+		if runtime.GOOS == "windows" {
+			// A PID-only scan cannot prove creation identity or descendant
+			// cleanup. Preserve legacy and qualified records until an exact
+			// owner explicitly unregisters them; never authorize a replacement
+			// launch by silently pruning an unqualified/reused PID.
+			live = append(live, e)
+		} else if e.PtyHostPID == 0 && e.PipePath == UnresolvedPipePath {
 			// A prelaunch reservation has no PID to probe. Retain it until an
 			// exact owner replaces or explicitly unregisters the reservation.
 			live = append(live, e)
@@ -332,4 +341,43 @@ func Clear(ctx context.Context) error {
 		return err
 	}
 	return writeRaw(ctx, nil)
+}
+
+// ErrOwnershipChanged means cleanup named a superseded or incomplete owner.
+var ErrOwnershipChanged = errors.New("conpty pty registry ownership changed")
+
+// UnregisterExact removes only the exact recorded owner. An older daemon or a
+// concurrent teardown must never erase a newly registered launch with the same
+// session ID. Missing entries are idempotent, but mismatches are retained.
+func UnregisterExact(ctx context.Context, expected Entry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if expected.SessionID == "" || expected.HostLaunchID == "" {
+		return ErrOwnershipChanged
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	all, complete, err := readRaw(ctx)
+	if err != nil || !complete {
+		return errors.Join(err, errors.New("conpty pty registry scan incomplete"))
+	}
+	next := make([]Entry, 0, len(all))
+	found := false
+	for _, entry := range all {
+		if entry.SessionID != expected.SessionID {
+			next = append(next, entry)
+			continue
+		}
+		if entry.PtyHostPID != expected.PtyHostPID || entry.PipePath != expected.PipePath ||
+			entry.LaunchID != expected.LaunchID || entry.HostLaunchID != expected.HostLaunchID ||
+			entry.HostCreatedAt != expected.HostCreatedAt {
+			return ErrOwnershipChanged
+		}
+		found = true
+	}
+	if !found {
+		return nil
+	}
+	return writeRaw(ctx, next)
 }

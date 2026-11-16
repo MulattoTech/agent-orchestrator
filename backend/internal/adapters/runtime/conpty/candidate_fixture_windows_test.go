@@ -234,6 +234,11 @@ func candidateCreate(t *testing.T, c candidateFixtureConfig, root, nonce string)
 		hostCommand = exec.Command(c.Executable, "pty-host", id, root, c.Helper)
 		hostCommand.Dir = root
 		hostCommand.Env = candidateEnvironment(c, root, nonce, false)
+		// Only the two runtime-owned identity values enter the otherwise
+		// fixed offline environment. No provider/account configuration is copied.
+		hostCommand.Env = append(hostCommand.Env,
+			hostLaunchIDEnv+"="+env[hostLaunchIDEnv],
+			runtimeLaunchIDEnv+"="+env[runtimeLaunchIDEnv])
 		hostCommand.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP, HideWindow: true}
 		stdout, err := hostCommand.StdoutPipe()
 		if err != nil {
@@ -291,7 +296,7 @@ func candidateCreate(t *testing.T, c candidateFixtureConfig, root, nonce string)
 		return e == nil && string(b) == nonce
 	})
 	status, alive, err := clientStatusContext(t.Context(), address)
-	if err != nil || !alive || !status.Alive || status.PID != helperPID {
+	if err != nil || !alive || !status.Alive || status.PID != helperPID || status.HostIdentity.SessionID != id || status.HostIdentity.RuntimeLaunchID != generation || status.HostIdentity.LaunchID == "" || status.HostIdentity.CreatedAt == "" || status.HostIdentity.PID != hostCommand.Process.Pid {
 		t.Fatalf("initial child status mismatch: %+v alive=%t err=%v", status, alive, err)
 	}
 	return rt, handle, candidateFixtureHandoff{Session: id, Generation: generation, Nonce: nonce, Host: host.identity, Helper: child.identity, Address: address}, host, child
