@@ -21,6 +21,8 @@ type SourceStatus struct {
 	At                   time.Time `json:"at"`
 	OwnedThreads         int       `json:"ownedThreads"`
 	MatchedFiles         int       `json:"matchedFiles"`
+	DirectoryEntries     int       `json:"directoryEntries"`
+	DiscoveryPending     bool      `json:"discoveryPending"`
 	ObservedReceipts     int64     `json:"observedReceipts"`
 	UnattributedReceipts int64     `json:"unattributedReceipts"`
 	BytesRead            int64     `json:"bytesRead"`
@@ -41,10 +43,13 @@ type Observer struct {
 	cursors map[string]*cursor
 	next    int
 	status  SourceStatus
+	files   map[string]Binding
+	walk    *discoveryWalk
+	closed  bool
 }
 
 func NewObserver(roots []string, sink Sink) *Observer {
-	return &Observer{roots: append([]string(nil), roots...), sink: sink, cursors: map[string]*cursor{}}
+	return &Observer{roots: append([]string(nil), roots...), sink: sink, cursors: map[string]*cursor{}, files: map[string]Binding{}}
 }
 func (o *Observer) Snapshot() SourceStatus {
 	o.mu.Lock()
@@ -54,7 +59,8 @@ func (o *Observer) Snapshot() SourceStatus {
 	return s
 }
 
-// Sweep reads at most 32MiB, 64 files and 20,000 directory entries. Cursor
+// Sweep reads at most 32MiB, 64 files and 20,000 directory entries. Directory
+// discovery resumes across sweeps, including roots after a large history. Cursor
 // checkpoints are in memory; restart replay is safe because receipts are
 // immutable and keyed by native response ID in the shared durable authority.
 func (o *Observer) Sweep(ctx context.Context, bindings []Binding) SourceStatus {
@@ -81,60 +87,32 @@ func (o *Observer) Sweep(ctx context.Context, bindings []Binding) SourceStatus {
 		owned[b.Thread] = b
 	}
 	s.OwnedThreads = len(owned)
+	if o.closed {
+		s.Errors = append(s.Errors, "native_observer_closed")
+		o.status = s
+		return s
+	}
+	// Drop revoked bindings immediately; ownership may change between sweeps.
+	for path, b := range o.files {
+		if current, ok := owned[b.Thread]; ok {
+			o.files[path] = current
+		} else {
+			delete(o.files, path)
+			delete(o.cursors, path)
+		}
+	}
+	if len(owned) == 0 {
+		o.closeWalk()
+	} else {
+		o.discover(ctx, owned, &s)
+	}
 	type found struct {
 		path    string
 		binding Binding
 	}
-	var files []found
-	entries := 0
-	for _, root := range o.roots {
-		if len(owned) == 0 {
-			break
-		}
-		root, err := filepath.EvalSymlinks(root)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			s.Errors = append(s.Errors, "native_root_unavailable")
-			continue
-		}
-		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			entries++
-			if entries > 20000 {
-				s.PendingBytes = true
-				return fs.SkipAll
-			}
-			if walkErr != nil {
-				return walkErr
-			}
-			// Never follow interior links into an unrelated transcript tree.
-			if d.Type()&os.ModeSymlink != 0 {
-				return nil
-			}
-			if d.IsDir() || !d.Type().IsRegular() {
-				return nil
-			}
-			name := d.Name()
-			if !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") || len(name) < 43 {
-				return nil
-			}
-			id := strings.TrimSuffix(name, ".jsonl")
-			id = id[len(id)-36:]
-			if b, ok := owned[id]; ok {
-				files = append(files, found{path, b})
-			}
-			return nil
-		})
-		if err != nil {
-			s.Errors = append(s.Errors, "native_discovery_incomplete")
-		}
-		if entries > 20000 {
-			break
-		}
+	files := make([]found, 0, len(o.files))
+	for path, b := range o.files {
+		files = append(files, found{path, b})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
 	s.MatchedFiles = len(files)
@@ -180,6 +158,147 @@ func (o *Observer) Sweep(ctx context.Context, bindings []Binding) SourceStatus {
 	result := s
 	result.Errors = append([]string(nil), s.Errors...)
 	return result
+}
+
+const maxDiscoveryEntries = 20000
+const maxDiscoveryDepth = 64
+
+type discoveryDirectory struct {
+	path string
+	file *os.File
+}
+type discoveryWalk struct {
+	nextRoot int
+	stack    []discoveryDirectory
+	seen     map[string]bool
+}
+
+// Close releases any directory handles retained by a bounded discovery pass.
+// It is safe after a canceled sweep and prevents subsequent observation.
+func (o *Observer) Close() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.closeWalk()
+	o.closed = true
+}
+func (o *Observer) closeWalk() {
+	if o.walk != nil {
+		for _, d := range o.walk.stack {
+			_ = d.file.Close()
+		}
+		o.walk = nil
+	}
+}
+
+// discover uses streaming directory enumeration instead of WalkDir, which sorts
+// and reads whole directories and restarts at the same prefix on every sweep.
+// At most 64 directory handles survive a sweep; no foreign transcript data or
+// unbounded directory-entry lists are retained. Known owned files remain readable
+// while a long discovery pass advances toward later entries and roots.
+func (o *Observer) discover(ctx context.Context, owned map[string]Binding, s *SourceStatus) {
+	if o.walk == nil {
+		o.walk = &discoveryWalk{seen: map[string]bool{}}
+	}
+	w := o.walk
+	for s.DirectoryEntries < maxDiscoveryEntries {
+		if ctx.Err() != nil {
+			s.Errors = append(s.Errors, "native_discovery_incomplete")
+			break
+		}
+		if len(w.stack) == 0 {
+			if w.nextRoot == len(o.roots) {
+				// Only a complete pass retires paths no longer present. A budget
+				// boundary cannot discard later files that are already observed.
+				for path := range o.files {
+					if !w.seen[path] {
+						delete(o.files, path)
+						delete(o.cursors, path)
+					}
+				}
+				o.walk = nil
+				return
+			}
+			root := o.roots[w.nextRoot]
+			w.nextRoot++
+			s.DirectoryEntries++
+			root, err := filepath.EvalSymlinks(root)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				s.Errors = append(s.Errors, "native_root_unavailable")
+				continue
+			}
+			f, err := os.Open(root)
+			if err != nil {
+				s.Errors = append(s.Errors, "native_root_unavailable")
+				continue
+			}
+			info, err := f.Stat()
+			if err != nil || !info.IsDir() {
+				_ = f.Close()
+				s.Errors = append(s.Errors, "native_root_unavailable")
+				continue
+			}
+			w.stack = append(w.stack, discoveryDirectory{root, f})
+			continue
+		}
+		dir := w.stack[len(w.stack)-1]
+		entries, err := dir.file.ReadDir(1)
+		if len(entries) == 0 {
+			_ = dir.file.Close()
+			w.stack = w.stack[:len(w.stack)-1]
+			if err != nil && err != io.EOF {
+				s.Errors = append(s.Errors, "native_discovery_incomplete")
+			}
+			continue
+		}
+		s.DirectoryEntries++
+		d := entries[0]
+		// Never follow interior links into an unrelated transcript tree.
+		if d.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		path := filepath.Join(dir.path, d.Name())
+		if d.IsDir() {
+			if len(w.stack) >= maxDiscoveryDepth {
+				s.Errors = append(s.Errors, "native_discovery_depth_limited")
+				continue
+			}
+			before, statErr := d.Info()
+			f, openErr := os.Open(path)
+			if statErr != nil || openErr != nil {
+				if f != nil {
+					_ = f.Close()
+				}
+				s.Errors = append(s.Errors, "native_discovery_incomplete")
+				continue
+			}
+			after, statErr := f.Stat()
+			if statErr != nil || !after.IsDir() || before.Mode()&os.ModeSymlink != 0 || !os.SameFile(before, after) {
+				_ = f.Close()
+				s.Errors = append(s.Errors, "native_discovery_changed")
+				continue
+			}
+			w.stack = append(w.stack, discoveryDirectory{path, f})
+			continue
+		}
+		if !d.Type().IsRegular() {
+			continue
+		}
+		name := d.Name()
+		if !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") || len(name) < 43 {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".jsonl")
+		id = id[len(id)-36:]
+		if b, ok := owned[id]; ok {
+			o.files[path] = b
+			w.seen[path] = true
+		}
+	}
+	s.DiscoveryPending = o.walk != nil
+	s.PendingBytes = s.PendingBytes || s.DiscoveryPending
 }
 
 // countedReceiptReader measures physical reads independently from committed JSONL

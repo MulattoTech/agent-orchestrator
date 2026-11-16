@@ -248,3 +248,73 @@ func TestObserverChargesMalformedAndOversizedReadsWithoutAdvancingCheckpoint(t *
 		})
 	}
 }
+
+func TestObserverDiscoveryResumesPastLargeHistoryIntoSecondRoot(t *testing.T) {
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
+	// WalkDir sorts these before rollout files. The old fixed-prefix scan
+	// could never discover the first receipt or reach the second root.
+	for i := 0; i < maxDiscoveryEntries+25; i++ {
+		if err := os.WriteFile(filepath.Join(firstRoot, fmt.Sprintf("history-%05d.tmp", i)), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secondThread := "00000000-0000-4000-8000-000000000002"
+	for root, id := range map[string]string{firstRoot: thread, secondRoot: secondThread} {
+		receiptDir := root
+		if root == firstRoot {
+			receiptDir = filepath.Join(root, "zz-latest")
+			if err := os.Mkdir(receiptDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(receiptDir, "rollout-test-"+id+".jsonl"), []byte(fixture(id, id, 100)), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sink := &memorySink{}
+	o := NewObserver([]string{firstRoot, secondRoot}, sink)
+	t.Cleanup(o.Close)
+	bindings := []Binding{{"first", thread}, {"second", secondThread}}
+	first := o.Sweep(t.Context(), bindings)
+	if first.DirectoryEntries != maxDiscoveryEntries || !first.DiscoveryPending || !first.PendingBytes || o.walk == nil {
+		t.Fatalf("discovery did not stop at a resumable bounded checkpoint: %+v", first)
+	}
+	if _, found := sink.receipts["codex:response:"+secondThread]; found {
+		t.Fatal("second root bypassed the directory-entry budget")
+	}
+	walk := o.walk
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	canceled := o.Sweep(ctx, bindings)
+	if canceled.DirectoryEntries != 0 || o.walk != walk {
+		t.Fatalf("cancellation discarded the traversal checkpoint: %+v", canceled)
+	}
+	second := o.Sweep(t.Context(), bindings)
+	if second.DirectoryEntries > maxDiscoveryEntries || second.DiscoveryPending || second.MatchedFiles != 2 || len(sink.receipts) != 2 || len(second.Errors) != 0 {
+		t.Fatalf("later entries or root starved: receipts=%d status=%+v", len(sink.receipts), second)
+	}
+	if o.walk != nil {
+		t.Fatal("completed traversal retained directory handles")
+	}
+	// Cancellation and a subsequent complete traversal cannot double-count.
+	for range 2 {
+		o.Sweep(t.Context(), bindings)
+	}
+	if len(sink.receipts) != 2 {
+		t.Fatal("resumed discovery replayed receipt effects")
+	}
+	o.Sweep(t.Context(), bindings)
+	if o.walk == nil || len(o.walk.stack) == 0 {
+		t.Fatal("test requires a partially scanned directory")
+	}
+	pendingDirectory := o.walk.stack[0].file
+	o.Close()
+	if fd := pendingDirectory.Fd(); fd != ^uintptr(0) {
+		t.Fatalf("Close retained a directory handle: %v", fd)
+	}
+	closed := o.Sweep(t.Context(), bindings)
+	if closed.DirectoryEntries != 0 || closed.BytesRead != 0 || len(closed.Errors) != 1 || closed.Errors[0] != "native_observer_closed" {
+		t.Fatalf("closed observer reopened directory handles: %+v", closed)
+	}
+}
