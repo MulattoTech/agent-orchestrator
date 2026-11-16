@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -74,6 +75,11 @@ func (s *Service) SetAccountHandoff(enabled func(context.Context) bool, accounts
 
 // HandoffUsageLimitedTurns advances the automatic usage-limit account handoffs by one step.
 func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
+	// Account switching is not an allowance-recovery mechanism for this build.
+	// Keep existing handoff consent and source turns intact; do not probe targets.
+	if inferenceguard.Enabled() {
+		return nil
+	}
 	store, ok := s.store.(accountHandoffStore)
 	s.handoffMu.Lock()
 	deps := s.handoff

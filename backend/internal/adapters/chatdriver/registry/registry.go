@@ -47,6 +47,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/qwenacp"
 	unrealchat "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/unrealagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/inferenceguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -144,6 +145,9 @@ func (r *Registry) InvalidateBinaryResolution(harness domain.AgentHarness) {
 
 // Driver returns the driver for a harness.
 func (r *Registry) Driver(harness domain.AgentHarness) (ports.ChatDriver, error) {
+	if err := inferenceguard.CheckLaunch(string(harness), "chat"); err != nil {
+		return nil, err
+	}
 	driver, ok := r.drivers[harness]
 	if !ok {
 		return nil, ports.ErrChatUnsupported

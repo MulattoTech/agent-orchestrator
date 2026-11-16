@@ -282,6 +282,15 @@ func installedCodexVersion(ctx context.Context, bin string) (string, error) {
 
 // Start opens a new Codex thread in the session worktree.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	guard, selection, guardErr := prepareDispatchGuard(cfg.DataDir, string(cfg.SessionID), cfg.PolicyRole, cfg.Model, cfg.Effort, cfg.ReadOnly)
+	if guardErr != nil {
+		return nil, guardErr
+	}
+	if guard != nil {
+		cfg.Model = selection.Model
+		cfg.Effort = selection.Effort
+	}
+
 	if !cfg.ProviderIDsScoped {
 		cfg.ProviderScopeID = ""
 	}
@@ -296,6 +305,13 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	)
 	if err != nil {
 		return nil, err
+	}
+	conv.attachDispatchGuard(guard, selection, string(cfg.SessionID), cfg.ProjectID)
+	if guard != nil {
+		if err := conv.verifyGuardCatalog(ctx, selection); err != nil {
+			_ = conv.Close()
+			return nil, err
+		}
 	}
 	if reconnected {
 		// A fresh-start request colliding with a surviving host is a durable-state
@@ -361,6 +377,15 @@ func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (por
 // Resume reattaches to a stored Codex thread after a daemon or app-server
 // restart. A thread that is still running is rejoined rather than restarted.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	guard, selection, guardErr := prepareDispatchGuard(cfg.DataDir, string(cfg.SessionID), cfg.PolicyRole, cfg.Model, cfg.Effort, cfg.ReadOnly)
+	if guardErr != nil {
+		return nil, guardErr
+	}
+	if guard != nil {
+		cfg.Model = selection.Model
+		cfg.Effort = selection.Effort
+	}
+
 	if !cfg.ProviderIDsScoped {
 		cfg.ProviderScopeID = ""
 	}
@@ -376,6 +401,13 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	)
 	if err != nil {
 		return nil, err
+	}
+	conv.attachDispatchGuard(guard, selection, string(cfg.SessionID), cfg.ProjectID)
+	if guard != nil {
+		if err := conv.verifyGuardCatalog(ctx, selection); err != nil {
+			_ = conv.Close()
+			return nil, err
+		}
 	}
 	if reconnected {
 		// The host preserved the already-initialized app-server connection and its
@@ -817,6 +849,15 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 
 // ForkIntoHost starts an inclusive native fork in an independent provider host.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	guard, selection, guardErr := prepareDispatchGuard(cfg.DataDir, string(cfg.SessionID), cfg.PolicyRole, cfg.Model, cfg.Effort, cfg.ReadOnly)
+	if guardErr != nil {
+		return nil, guardErr
+	}
+	if guard != nil {
+		cfg.Model = selection.Model
+		cfg.Effort = selection.Effort
+	}
+
 	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
 		return nil, errors.New("source thread and exact turn anchor are required")
 	}
@@ -826,6 +867,13 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false)
 	if err != nil {
 		return nil, err
+	}
+	conv.attachDispatchGuard(guard, selection, string(cfg.SessionID), cfg.ProjectID)
+	if guard != nil {
+		if err := conv.verifyGuardCatalog(ctx, selection); err != nil {
+			_ = conv.Close()
+			return nil, err
+		}
 	}
 	if reconnected {
 		_ = conv.Close()

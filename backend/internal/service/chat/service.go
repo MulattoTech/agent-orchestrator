@@ -866,6 +866,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		unanswered := s.branchUnanswered(ctx, cfg.SessionID, conversation.ID, activeBranch)
 		freshIfMissing = freshIfMissing || unanswered
 		conv, err = resume(ctx, ports.ChatResumeConfig{
+			PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
 			FreshIfMissing:         freshIfMissing,
@@ -886,6 +887,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		})
 	} else {
 		conv, err = driver.Start(ctx, ports.ChatStartConfig{
+			PolicyRole: inferenceRole(cfg), ProjectID: cfg.ProjectID,
 			ProviderIDsScoped:     providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
 			SessionID:             hostID,
 			DataDir:               cfg.DataDir,
