@@ -24,7 +24,7 @@ $goCalls = @($build.FindAll({
     param($n)
     $n -is [Management.Automation.Language.CommandAst] -and $n.CommandElements[0].Extent.Text -eq '$goTool'
 }, $true))
-if ($goCalls.Count -ne 4) { throw 'Build must invoke only Go version, two builds, and compile-only go test.' }
+if ($goCalls.Count -ne 5) { throw 'Build must invoke only Go version, two builds, and two compile-only go test commands.' }
 foreach ($call in $goCalls) {
     $parts = @($call.CommandElements | ForEach-Object { $_.Extent.Text })
     if ($parts[1] -notin @('version', 'build', 'test') -or ($parts[1] -eq 'test' -and '-c' -notin $parts)) {
@@ -38,6 +38,17 @@ if ($sources['Build-Candidate.ps1'] -notmatch 'inferenceguard\.RequirePolicy=1' 
     $sources['Build-Candidate.ps1'] -notmatch 'admissionOfflineCompanion=1' -or
     $sources['Build-Candidate.ps1'] -notmatch 'admissionPackagedHelperSHA256=') {
     throw 'Strict or companion build identity is missing.'
+}
+if (-not $sources['Build-Candidate.ps1'].Contains('conpty.OfflineCandidateConPTYFixture=1') -or
+    -not $sources['Build-Candidate.ps1'].Contains("'ao-offline-conpty.exe') ./internal/adapters/runtime/conpty") -or
+    -not $sources['Build-Candidate.ps1'].Contains("candidateConPTY = 'NOT_RUN_BY_BUILD'")) {
+    throw 'Candidate ConPTY companion must be compile-only and linked to its fixed TestMain.'
+}
+$compileCalls = @($goCalls | Where-Object { $_.CommandElements[1].Extent.Text -ceq 'test' })
+if ($compileCalls.Count -ne 2 -or
+    @($compileCalls | Where-Object { $_.Extent.Text -match './internal/session_manager' }).Count -ne 1 -or
+    @($compileCalls | Where-Object { $_.Extent.Text -match './internal/adapters/runtime/conpty' }).Count -ne 1) {
+    throw 'Build must compile exactly the fleet and ConPTY fixtures.'
 }
 $buildCommands = @($build.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() })
 if (@($buildCommands | Where-Object { $_ -in @('Start-Process', 'Invoke-RestMethod', 'Invoke-WebRequest') }).Count -ne 0) {
@@ -53,6 +64,36 @@ if ($fleetCalls.Count -ne 1 -or $fleetCalls[0].CommandElements.Count -ne 1 -or $
 }
 if ($sources['Run-Offline-Fleet.ps1'].IndexOf('Assert-CandidateBundle') -gt $fleetCalls[0].Extent.StartOffset) {
     throw 'Offline executable is used before hash verification.'
+}
+$conpty = $asts['Run-Offline-ConPTY.ps1']
+$conptyText = $sources['Run-Offline-ConPTY.ps1']
+$conptyCalls = @($conpty.FindAll({
+    param($n)
+    $n -is [Management.Automation.Language.CommandAst] -and $n.CommandElements[0].Extent.Text -ceq '$conptyExe'
+}, $true))
+if ($conptyCalls.Count -ne 1 -or $conptyCalls[0].CommandElements.Count -ne 1 -or $conpty.ParamBlock.Parameters.Count -ne 0) {
+    throw 'Offline ConPTY runner must execute only its fixed companion with no arguments.'
+}
+if ($conptyText.IndexOf('Assert-CandidateBundle') -gt $conptyCalls[0].Extent.StartOffset -or
+    $conptyText.IndexOf("SetEnvironmentVariable('AO_CONPTY_FIXTURE_OWNER', "+'$null') -lt 0 -or
+    $conptyText.IndexOf("SetEnvironmentVariable('AO_CONPTY_FIXTURE_OWNER', "+'$null') -gt $conptyCalls[0].Extent.StartOffset) {
+    throw 'ConPTY companion must verify hashes and clear caller-selected owner mode before execution.'
+}
+foreach ($required in @(
+    'AO_CONPTY_CANDIDATE_EXE = Join-Path $bundle.Root ''AO.exe''',
+    'AO_CONPTY_CANDIDATE_SHA256 = $bundle.Manifest.files[''AO.exe''].sha256',
+    'AO_CONPTY_CANDIDATE_SOURCE = $bundle.Manifest.sourceCommit',
+    'AO_CONPTY_HELPER_EXE = Join-Path $bundle.Root ''ao-offline-worker.exe''',
+    'AO_CONPTY_HELPER_SHA256 = $bundle.Manifest.files[''ao-offline-worker.exe''].sha256',
+    '$item.Name -like ''AO_*''', '$item.Name -like ''CODEX_*''',
+    '$item.Name -like ''OPENAI_*''', '$item.Name -like ''ANTHROPIC_*''',
+    '$item.Name -like ''CLAUDE_*''', 'manifestSHA256', 'binarySHA256', 'candidateSHA256', 'helperSHA256', 'logSHA256')) {
+    if (-not $conptyText.Contains($required)) { throw "Missing fixed ConPTY boundary: $required" }
+}
+$conptyCommands = @($conpty.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() })
+if (@($conptyCommands | Where-Object { $_ -in @('Start-Process', 'Invoke-RestMethod', 'Invoke-WebRequest') }).Count -ne 0 -or
+    $conptyText -match 'Start-PostRefresh-Validation|Stop-Candidate|AuthorizePostRefreshValidation|EnableAllowanceObservation') {
+    throw 'Offline ConPTY runner must not call daemon startup/shutdown or native account observation.'
 }
 $start = $asts['Start-PostRefresh-Validation.ps1']
 $starts = @($start.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start-Process' }, $true))
@@ -113,7 +154,8 @@ foreach ($required in @('Get-CandidateOwnedProcess', 'Get-CandidateOwnedRun', 's
 }
 $commonText = $sources['Candidate.Common.ps1']
 foreach ($required in @('processStartTicksUtc', 'executableSHA256', 'Get-NetTCPConnection', 'OwningProcess',
-    '$running.appRunId -cne $Record.runId', 'ReparsePoint', 'manifest.sha256', 'GetPathRoot', '0x500D0040', 'Get-Acl', 'SetAccessRuleProtection')) {
+    '$running.appRunId -cne $Record.runId', 'ReparsePoint', 'manifest.sha256', 'GetPathRoot', '0x500D0040', 'Get-Acl', 'SetAccessRuleProtection',
+    'ao-offline-conpty.exe', 'Run-Offline-ConPTY.ps1', 'offlineConPTY.allowlistEnforced')) {
     if (-not $commonText.Contains($required)) { throw "Missing ownership/hash validation: $required" }
 }
 if ($commonText -match '\.SetOwner\(' -or $commonText -match '\.SetAudit' -or $commonText -match 'RunAs') {
@@ -141,5 +183,5 @@ foreach ($role in @('orchestrator', 'implementation', 'complex', 'reviewer', 'li
         if ($model -match '(?i)luna') { throw 'Template prematurely permits Luna.' }
     }
 }
-Write-Output "PASS: parsed $($asts.Count) PowerShell scripts; build is compile-only, fleet arguments are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
+Write-Output "PASS: parsed $($asts.Count) PowerShell scripts; build is compile-only, fleet/ConPTY arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
 Write-Output 'Scope: AST/static validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'

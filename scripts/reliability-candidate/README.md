@@ -61,12 +61,14 @@ The recipe:
 4. Builds the standard-library-only fake worker, hashes it, and compiles the
    session-manager test package with its fixed offline TestMain allowlist and the
    worker's exact SHA-256.
-5. Writes a **new** C:\AODev\releases\ao-unofficial-UTC-commit12 directory,
+5. Compiles a separate ConPTY test executable with its fixed parent/owned-child
+   TestMain selectors. This is still go test -c; compilation launches no fixture.
+6. Writes a **new** C:\AODev\releases\ao-unofficial-UTC-commit12 directory,
    per-file hashes, and a manifest/digest. It leaves failed artifacts intact for
    inspection and never overwrites an earlier release.
 
 The build script executes no resulting binary, daemon, provider, or test.
-The go test -c invocation compiles the offline companion. Build manifests report
+The two go test -c invocations compile the offline companions. Build manifests report
 validation as not run; successful compilation does not qualify live behavior.
 
 Hashes detect accidental changes relative to the locally issued manifest; they
@@ -92,6 +94,41 @@ Results and logs go to a new C:\AODev\validation\offline-GUID directory.
 The fixture manages temporary state, injected runtimes, and up to 40 bounded
 standard-library Windows child processes. It does not prove ConPTY, real provider
 loops, a full AO desktop/daemon run, or economical engineering output.
+
+## Offline candidate terminal exercise
+
+From the same immutable release directory:
+
+~~~powershell
+pwsh -NoProfile -File .\Run-Offline-ConPTY.ps1
+~~~
+
+This separate runner accepts **no arguments**. It verifies the manifest and all
+packaged files, then passes the exact candidate/helper paths, source SHA and
+file hashes to ao-offline-conpty.exe. Caller AO/provider settings are cleared,
+including the private fixture-owner selector. Its linked TestMain selects only
+the parent fixture; an internally created child selects only the owned-child
+test. The child receives a small environment whitelist.
+
+The fixture starts the actual candidate **AO.exe pty-host** with the fixed
+standard-library ao-offline-worker.exe. It exercises Windows terminal streaming,
+detach/reattach, ownership checks and recovery using fixture-owned processes.
+It does not use normal daemon startup, a provider/account command, a model turn,
+production AO state or the live-validation launcher. It is an offline
+engineering test; the post-refresh launch time hold does not apply to it.
+
+A deliberate fixture-owner crash and owned-process cleanup are part of this
+exercise. Those actions must use exact fixture process identity and retained
+Windows handles. Preserve the final source/hash-pinned result for the status,
+creation-identity and stale-port fences; an earlier candidate's result cannot
+qualify a subsequently repaired identity contract.
+
+Results go to a new C:\AODev\validation\offline-conpty-GUID directory. The
+record includes source, manifest, companion, AO.exe, helper and log hashes plus
+the exit status. Passing this fixture establishes its stated terminal and
+fixture recovery behavior. It does not establish full daemon boot/restart,
+account bootstrap, native model loops, real agent economics or fleet-wide
+descendant coverage. Record fleet and ConPTY results separately.
 
 ## Post-refresh startup is a separate owner action
 
@@ -239,12 +276,13 @@ do not bypass them with a broad kill.
 ## Static verification and remaining qualification
 
 Test-CandidateScripts.ps1 parses PowerShell ASTs and reads the JSON template.
-It checks compile-only build commands, fixed fake-run arguments, pre-launch
+It checks compile-only build commands, fixed fleet/ConPTY arguments and hash-derived
+fixture inputs, pre-launch
 gates, owned stop checks, and conservative policy structure. It never executes
 the start/stop scripts, AO, a provider, or an account endpoint.
 
 Only static execution checks of these start/stop scripts are authorized in the
-exhausted-allowance phase. The final candidate's compiled offline companion is
+exhausted-allowance phase. The final candidate's compiled offline companions are
 run separately after the final source commit. Fresh private-directory creation
 and DACL behavior, safe native-home metadata, fake daemon/ConPTY seams and
 complete descendant ownership are offline or host-engineering gates; they do

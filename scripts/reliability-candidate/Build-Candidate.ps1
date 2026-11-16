@@ -62,13 +62,16 @@ try {
     # -c compiles the package tests without executing them or launching providers.
     & $goTool test -p 1 -c -trimpath -ldflags $companionFlags -o (Join-Path $releaseDir 'ao-offline-fleet.exe') ./internal/session_manager 2>&1 | Tee-Object -FilePath $buildLog -Append
     if ($LASTEXITCODE -ne 0) { throw 'Offline allowlist companion compilation failed.' }
+    $conptyFlags = "-X $module/adapters/runtime/conpty.OfflineCandidateConPTYFixture=1"
+    & $goTool test -p 1 -c -trimpath -ldflags $conptyFlags -o (Join-Path $releaseDir 'ao-offline-conpty.exe') ./internal/adapters/runtime/conpty 2>&1 | Tee-Object -FilePath $buildLog -Append
+    if ($LASTEXITCODE -ne 0) { throw 'Offline candidate ConPTY fixture compilation failed.' }
     $mainTest = Get-Content -LiteralPath (Join-Path $repo 'backend\internal\session_manager\main_test.go') -Raw
     $match = [regex]::Match($mainTest, '(?m)^const admissionOfflineTestAllowlist = "([^"]+)"')
     if (-not $match.Success -or $mainTest -notmatch 'admissionOfflineCompanion == "1"') {
         throw 'Compiled offline allowlist source could not be identified.'
     }
     [IO.File]::WriteAllText((Join-Path $releaseDir 'offline-test-allowlist.txt'), $match.Groups[1].Value + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-    foreach ($name in @('Candidate.Common.ps1', 'Build-Candidate.ps1', 'Run-Offline-Fleet.ps1',
+    foreach ($name in @('Candidate.Common.ps1', 'Build-Candidate.ps1', 'Run-Offline-Fleet.ps1', 'Run-Offline-ConPTY.ps1',
         'Start-PostRefresh-Validation.ps1', 'Stop-Candidate.ps1', 'Test-CandidateScripts.ps1', 'policy.template.json', 'README.md')) {
         Copy-Item -LiteralPath (Join-Path $packageSource $name) -Destination (Join-Path $releaseDir $name) -ErrorAction Stop
     }
@@ -91,7 +94,12 @@ try {
             maxNativeChildren = 40; childMemoryBudgetBytes = 805306368
             scope = 'Compiled fake-runtime/stdlib-worker tests; not the AO daemon or ConPTY/provider qualification'
         }
-        validation = @{ syntheticFleet = 'NOT_RUN_BY_BUILD'; daemonStartup = 'NOT_RUN'; liveProvider = 'NOT_RUN' }
+        offlineConPTY = @{
+            allowlistEnforced = $true; parentTest = '^TestActualCandidateConPTYMechanics$'
+            internalOwnerTest = '^TestCandidateConPTYOwnerProcess$'; linkerFlags = $conptyFlags
+            scope = 'Actual candidate pty-host plus fixed stdlib helper; no normal daemon/account/provider startup'
+        }
+        validation = @{ syntheticFleet = 'NOT_RUN_BY_BUILD'; candidateConPTY = 'NOT_RUN_BY_BUILD'; daemonStartup = 'NOT_RUN'; liveProvider = 'NOT_RUN' }
         files = $files
     }
     Write-CandidateJSONNew (Join-Path $releaseDir 'manifest.json') $manifest
