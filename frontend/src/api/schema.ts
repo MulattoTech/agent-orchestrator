@@ -7036,6 +7036,11 @@ export interface components {
             steerActivityId?: string;
             turnId: string;
         };
+        DomainPRCompletionDependency: {
+            headSha: string;
+            prUrl: string;
+            sessionId: string;
+        };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
             harness: string;
@@ -8915,6 +8920,7 @@ export interface components {
         };
         SpawnSessionRequest: {
             accountId?: string;
+            admissionDependencies?: string[];
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             async?: boolean;
@@ -8934,6 +8940,7 @@ export interface components {
             mode?: "chat" | "tui";
             model?: string;
             parentSessionId?: string;
+            prCompletionDependencies?: components["schemas"]["DomainPRCompletionDependency"][];
             projectId?: string;
             prompt?: string;
             /** @enum {string} */
