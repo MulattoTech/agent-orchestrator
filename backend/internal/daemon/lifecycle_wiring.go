@@ -428,6 +428,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	if scmProvider != nil {
 		reviewOpts = append(reviewOpts,
 			reviewsvc.WithReviewRequester(scmProvider),
+			reviewsvc.WithReviewPublisher(scmProvider),
 			reviewsvc.WithReviewResolver(scmProvider),
 		)
 	}

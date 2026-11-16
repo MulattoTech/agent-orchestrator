@@ -475,3 +475,19 @@ func (m *Provider) AuthenticatedIdentityForProvider(ctx context.Context, provide
 	}
 	return resolver.AuthenticatedIdentity(ctx)
 }
+
+// PublishReview delegates saved-verdict publication without starting a model.
+func (m *Provider) PublishReview(ctx context.Context, request ports.SCMReviewPublication) (ports.SCMReviewPublicationReceipt, error) {
+	if m == nil {
+		return ports.SCMReviewPublicationReceipt{}, ports.ErrSCMUnsupported
+	}
+	p, err := m.resolve(request.PR.Repo.Provider)
+	if err != nil {
+		return ports.SCMReviewPublicationReceipt{}, err
+	}
+	publisher, ok := p.(ports.SCMReviewPublisher)
+	if !ok {
+		return ports.SCMReviewPublicationReceipt{}, ports.ErrSCMUnsupported
+	}
+	return publisher.PublishReview(ctx, request)
+}
