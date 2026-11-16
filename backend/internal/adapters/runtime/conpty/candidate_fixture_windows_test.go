@@ -56,12 +56,13 @@ type candidateFixtureIdentity struct {
 }
 
 type candidateFixtureHandoff struct {
-	Session    string                   `json:"session"`
-	Generation string                   `json:"generation"`
-	Nonce      string                   `json:"nonce"`
-	Host       candidateFixtureIdentity `json:"host"`
-	Helper     candidateFixtureIdentity `json:"helper"`
-	Address    string                   `json:"address"`
+	Session     string                     `json:"session"`
+	Generation  string                     `json:"generation"`
+	Nonce       string                     `json:"nonce"`
+	Host        candidateFixtureIdentity   `json:"host"`
+	Helper      candidateFixtureIdentity   `json:"helper"`
+	Address     string                     `json:"address"`
+	Descendants []candidateFixtureIdentity `json:"descendants"`
 }
 
 type candidateOwnedProcess struct {
@@ -196,7 +197,7 @@ func candidateEnvironment(c candidateFixtureConfig, root, nonce string, owner bo
 		"PATH=" + filepath.Join(os.Getenv("SystemRoot"), "System32"), "TEMP=" + root, "TMP=" + root, "GOMAXPROCS=2",
 		"AO_DATA_DIR=" + root, "AO_RUN_FILE=" + filepath.Join(root, "running.json"),
 		"AO_TELEMETRY_EVENTS=off", "AO_TELEMETRY_METRICS=off", "AO_TELEMETRY_REMOTE=off",
-		"AO_ADMISSION_NATIVE_HELPER=1", "AO_ADMISSION_HELPER_READY=" + filepath.Join(root, "worker.ready"), "AO_ADMISSION_HELPER_TOKEN=" + nonce,
+		"AO_ADMISSION_NATIVE_HELPER=1", "AO_ADMISSION_HELPER_TREE=1", "AO_ADMISSION_HELPER_READY=" + filepath.Join(root, "worker.ready"), "AO_ADMISSION_HELPER_TOKEN=" + nonce,
 		"AO_CONPTY_CANDIDATE_EXE=" + c.Executable, "AO_CONPTY_CANDIDATE_SHA256=" + c.ExecutableSHA256, "AO_CONPTY_CANDIDATE_SOURCE=" + c.SourceCommit,
 		"AO_CONPTY_HELPER_EXE=" + c.Helper, "AO_CONPTY_HELPER_SHA256=" + c.HelperSHA256,
 		"AO_CONPTY_FIXTURE_ROOT=" + root, "AO_CONPTY_FIXTURE_NONCE=" + nonce,
@@ -299,7 +300,12 @@ func candidateCreate(t *testing.T, c candidateFixtureConfig, root, nonce string)
 	if err != nil || !alive || !status.Alive || status.PID != helperPID || status.HostIdentity.SessionID != id || status.HostIdentity.RuntimeLaunchID != generation || status.HostIdentity.LaunchID == "" || status.HostIdentity.CreatedAt == "" || status.HostIdentity.PID != hostCommand.Process.Pid {
 		t.Fatalf("initial child status mismatch: %+v alive=%t err=%v", status, alive, err)
 	}
-	return rt, handle, candidateFixtureHandoff{Session: id, Generation: generation, Nonce: nonce, Host: host.identity, Helper: child.identity, Address: address}, host, child
+	descendants := candidateTreeProcesses(t, root, nonce, c.Helper, helperPID)
+	identities := make([]candidateFixtureIdentity, 0, len(descendants))
+	for _, process := range descendants {
+		identities = append(identities, process.identity)
+	}
+	return rt, handle, candidateFixtureHandoff{Session: id, Generation: generation, Nonce: nonce, Host: host.identity, Helper: child.identity, Address: address, Descendants: identities}, host, child
 }
 
 func candidateState(t *testing.T) (string, string) {
@@ -410,6 +416,15 @@ func TestActualCandidateConPTYMechanics(t *testing.T) {
 	}
 	host := candidateProcess(t, record.Host, c.Executable)
 	child := candidateProcess(t, record.Helper, c.Helper)
+	descendants := candidateTreeProcesses(t, root, nonce, c.Helper, record.Helper.PID)
+	if len(record.Descendants) != len(descendants) {
+		t.Fatal("controller omitted descendant identity")
+	}
+	for i, process := range descendants {
+		if process.identity != record.Descendants[i] {
+			t.Fatal("controller descendant handoff changed")
+		}
+	}
 	t.Cleanup(func() { _ = child.stop(); child.close(); _ = host.stop(); host.close() })
 	if err := owner.Process.Kill(); err != nil {
 		t.Fatal(err)
@@ -425,6 +440,7 @@ func TestActualCandidateConPTYMechanics(t *testing.T) {
 	if live, err := child.alive(); err != nil || !live {
 		t.Fatalf("helper did not survive controller exit: %t %v", live, err)
 	}
+	assertCandidateTreeAlive(t, descendants)
 	rt := New(Options{RunFilePath: filepath.Join(root, "running.json"), Spawner: func(context.Context, string, string, []string, map[string]string, HostOptions) (string, int, error) {
 		return "", 0, errors.New("recovery must adopt, never launch")
 	}})
@@ -453,9 +469,11 @@ func TestActualCandidateConPTYMechanics(t *testing.T) {
 			t.Fatalf("detach killed helper: %t %v", live, err)
 		}
 	}
+	assertCandidateTreeAlive(t, descendants)
 	if err := child.stop(); err != nil {
 		t.Fatal(err)
 	}
+	assertCandidateTreeExited(t, descendants)
 	candidateWait(t, 5*time.Second, "explicit child-exit status", func() bool {
 		s, h, e := clientStatusContext(t.Context(), record.Address)
 		return e == nil && h && !s.Alive && s.ExitCode != nil
@@ -476,15 +494,30 @@ func TestActualCandidateConPTYMechanics(t *testing.T) {
 	if err != nil || dirtyBefore != dirtyAfter {
 		t.Fatal("candidate recovery changed dirty fixture content")
 	}
-	t.Logf("CANDIDATE_CONPTY_RECOVERY candidateSource=%s candidateSHA256=%s helperSHA256=%s ownerPID=%d hostPID=%d helperPID=%d reconnects=3 dirtySHA256=%s providerCalls=0 fullDaemonRun=false", c.SourceCommit, c.ExecutableSHA256, c.HelperSHA256, owner.Process.Pid, record.Host.PID, record.Helper.PID, dirtyAfter)
+	t.Logf("CANDIDATE_CONPTY_RECOVERY candidateSource=%s candidateSHA256=%s helperSHA256=%s ownerPID=%d hostPID=%d helperPID=%d reconnects=3 dirtySHA256=%s ownedDescendants=2 controllerLossPreservedTree=true rootExitReapedTree=true providerCalls=0 fullDaemonRun=false", c.SourceCommit, c.ExecutableSHA256, c.HelperSHA256, owner.Process.Pid, record.Host.PID, record.Helper.PID, dirtyAfter)
 	crashRoot, crashNonce := candidateState(t)
 	_, _, crash, crashHost, crashChild := candidateCreate(t, c, crashRoot, crashNonce)
+	crashDescendants := candidateTreeProcesses(t, crashRoot, crashNonce, c.Helper, crash.Helper.PID)
 	if err := crashHost.stop(); err != nil {
 		t.Fatal(err)
 	}
 	candidateWait(t, 5*time.Second, "helper exit after owned host crash", func() bool { live, e := crashChild.alive(); return e == nil && !live })
+	assertCandidateTreeExited(t, crashDescendants)
 	if err := ptyregistry.Unregister(t.Context(), crash.Session); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("CANDIDATE_CONPTY_HOST_CRASH candidateSource=%s hostPID=%d helperPID=%d directHelperExitObserved=true descendantCoverage=UNKNOWN providerCalls=0", c.SourceCommit, crash.Host.PID, crash.Helper.PID)
+	t.Logf("CANDIDATE_CONPTY_HOST_CRASH candidateSource=%s hostPID=%d helperPID=%d directHelperExitObserved=true ownedDescendants=2 descendantCoverage=OWNED_CREATEPROCESS_TREE providerCalls=0", c.SourceCommit, crash.Host.PID, crash.Helper.PID)
+	destroyRoot, destroyNonce := candidateState(t)
+	destroyRuntime, destroyHandle, destroyed, destroyHost, destroyChild := candidateCreate(t, c, destroyRoot, destroyNonce)
+	destroyDescendants := candidateTreeProcesses(t, destroyRoot, destroyNonce, c.Helper, destroyed.Helper.PID)
+	if err := destroyRuntime.Destroy(t.Context(), destroyHandle); err != nil {
+		t.Fatal(err)
+	}
+	candidateWait(t, 5*time.Second, "owned Destroy ends host and root", func() bool {
+		hostAlive, hostErr := destroyHost.alive()
+		childAlive, childErr := destroyChild.alive()
+		return hostErr == nil && childErr == nil && !hostAlive && !childAlive
+	})
+	assertCandidateTreeExited(t, destroyDescendants)
+	t.Logf("CANDIDATE_CONPTY_DESTROY candidateSource=%s ownedDescendants=2 exactOwnedTreeExited=true providerCalls=0 fullDaemonRun=false", c.SourceCommit)
 }
