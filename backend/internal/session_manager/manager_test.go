@@ -3026,9 +3026,17 @@ func TestSpawn_UnconfirmedNativeModelPreventsTask(t *testing.T) {
 		Workspace: &fakeWorkspace{}, Store: st, Messenger: msg, Lifecycle: &fakeLCM{store: st},
 		LookPath: func(string) (string, error) { return "/bin/true", nil }})
 	m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "opus"}}}})
-	deadline, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	unconfirmed, cancel := context.WithCancel(ctx)
 	defer cancel()
-	_, _, _, err := m.Spawn(deadline, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker,
+	// Cancel only after the fake model command is delivered. A deadline measured
+	// from Spawn also includes Windows filesystem/setup latency and can expire
+	// before reaching the model-confirmation boundary this test exercises.
+	msg.onSend = func(_ domain.SessionID, input string) {
+		if input == "/model opus" {
+			cancel()
+		}
+	}
+	_, _, _, err := m.Spawn(unconfirmed, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker,
 		Prompt: "fix the button", AgentConfig: ports.AgentConfig{Model: "opus"}})
 	if err == nil {
 		t.Fatal("spawn succeeded without native model confirmation")
@@ -6088,6 +6096,9 @@ func TestSpawn_DefaultBranchFetchFailureDoesNotBlockWorkerSpawn(t *testing.T) {
 func TestSpawn_DefaultsBranchUnderDevNamespaceForDevDataDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
 	m, st, _, _ := newManager()
 	m.dataDir = filepath.Join(home, ".ao", "dev", "data")
 
@@ -6111,6 +6122,9 @@ func TestSpawn_DefaultsBranchUnderDevNamespaceForDevDataDir(t *testing.T) {
 func TestSpawn_ExplicitBranchBypassesDevNamespace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
 	m, st, _, _ := newManager()
 	m.dataDir = filepath.Join(home, ".ao", "dev", "data")
 
@@ -8541,7 +8555,7 @@ func TestSpawn_DoesNotAddNodeRuntimeForNativeBinary(t *testing.T) {
 	if nodeLookups != 0 {
 		t.Fatalf("node LookPath calls = %d, want 0 for native binary", nodeLookups)
 	}
-	want := strings.Join([]string{"/ao/bin", binDir, "/usr/bin"}, string(os.PathListSeparator))
+	want := strings.Join([]string{filepath.Dir("/ao/bin/ao"), binDir, "/usr/bin"}, string(os.PathListSeparator))
 	if got := rt.lastCfg.Env["PATH"]; got != want {
 		t.Fatalf("runtime env PATH = %q, want %q", got, want)
 	}
