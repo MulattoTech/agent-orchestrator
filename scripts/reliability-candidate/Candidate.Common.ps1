@@ -111,7 +111,7 @@ function Assert-CandidateACL {
     $raw = [Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
     if ($null -eq $raw.Owner -or $raw.Owner.Value -notin $trusted -or
         ($CurrentOwner -and $raw.Owner.Value -cne $currentSid) -or $null -eq $raw.DiscretionaryAcl) {
-        throw "Unverified Windows owner or DACL: $Path"
+        throw "AO_ACL_OWNER_OR_DACL_UNVERIFIED: $Path"
     }
     # Matches codexWindowsAncestorMutationMask: generic write/all, DELETE,
     # DELETE_CHILD, WRITE_DAC, WRITE_OWNER. Specific create-file/subdirectory
@@ -122,12 +122,13 @@ function Assert-CandidateACL {
         $kind = [int]$ace.AceType
         if ($kind -in @(1, 6, 10, 12)) { continue } # deny ACEs cannot grant access
         if ($kind -ne 0 -or $ace -isnot [Security.AccessControl.CommonAce]) {
-            throw "Unsupported effective Windows ACE; startup remains blocked: $Path"
+            throw "AO_ACL_UNSUPPORTED_ALLOW_ACE: $Path"
         }
         $sid = $ace.SecurityIdentifier.Value
         $mask = ([long]$ace.AccessMask) -band 0xFFFFFFFFL
         if ($sid -notin $trusted -and (($Private -and $mask -ne 0) -or (($mask -band $ancestorMutation) -ne 0))) {
-            throw "Unsafe Windows ACL; existing permissions will not be changed: $Path"
+            $reason = if ($Private) { 'AO_ACL_UNTRUSTED_PRIVATE_ALLOW' } else { 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW' }
+            throw "${reason}: $Path (no permission changes made)"
         }
     }
     return $acl

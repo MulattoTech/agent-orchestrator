@@ -213,6 +213,10 @@ foreach ($required in @('processStartTicksUtc', 'executableSHA256', 'Get-NetTCPC
     'ao-offline-daemon.exe', 'Run-Offline-Daemon.ps1', 'offlineDaemon.allowlistEnforced', 'offlineDaemon.sourcePinned', 'manifest.unsigned')) {
     if (-not $commonText.Contains($required)) { throw "Missing ownership/hash validation: $required" }
 }
+foreach ($category in @('AO_ACL_OWNER_OR_DACL_UNVERIFIED', 'AO_ACL_UNSUPPORTED_ALLOW_ACE',
+    'AO_ACL_UNTRUSTED_PRIVATE_ALLOW', 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW')) {
+    if (-not $commonText.Contains($category)) { throw "Missing fail-closed ACL diagnostic category: $category" }
+}
 if ($commonText -match '\.SetOwner\(' -or $commonText -match '\.SetAudit' -or $commonText -match 'RunAs') {
     throw 'Candidate must not change owner/SACL or elevate.'
 }
