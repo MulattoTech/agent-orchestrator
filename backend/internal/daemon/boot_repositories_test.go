@@ -104,7 +104,8 @@ func TestExplicitForkSeedReaperRetainsStartupProjectFiltering(t *testing.T) {
 	gitRoot := t.TempDir()
 	rows := []domain.ProjectRecord{
 		{ID: "repository", Path: gitRoot},
-		{ID: "scratch", Path: t.TempDir(), Kind: domain.ProjectKindWorkspace},
+		{ID: "workspace", Path: t.TempDir(), Kind: domain.ProjectKindWorkspace},
+		{ID: "scratch", Path: t.TempDir(), Kind: domain.ProjectKindScratch},
 		{ID: "missing", Path: filepath.Join(t.TempDir(), "absent")},
 		{ID: "empty"},
 	}

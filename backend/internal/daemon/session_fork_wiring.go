@@ -244,7 +244,7 @@ func reapForkSeedsWithReaper(ctx context.Context, store *sqlite.Store, log *slog
 		return err
 	}
 	for _, project := range projects {
-		if project.Path == "" || project.Kind.WithDefault() == domain.ProjectKindWorkspace {
+		if project.Path == "" || project.Kind.WithDefault() == domain.ProjectKindWorkspace || project.Kind.WithDefault() == domain.ProjectKindScratch {
 			continue
 		}
 		if _, err := os.Stat(project.Path); err != nil {
