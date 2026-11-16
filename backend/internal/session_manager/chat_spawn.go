@@ -218,6 +218,10 @@ type chatSpawn struct {
 // first so no app-server process is left behind holding the worktree.
 func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domain.SessionRecord, error) {
 	id := in.record.ID
+	if err := m.reserveWorkspaceOwner(ctx, id, in.workspace.Path); err != nil {
+		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
+		return domain.SessionRecord{}, err
+	}
 	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, in.cfg.Harness)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
@@ -526,6 +530,14 @@ func (m *Manager) resumeChatController(
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 	awakeTargets ...domain.AwakeAgentTarget,
 ) (RestoreResult, error) {
+	ctx, _, releaseAdmission, admissionErr := m.reserveSessionAdmission(ctx, rec.ProjectID, rec.Kind, rec.ID)
+	if admissionErr != nil {
+		return RestoreResult{}, admissionErr
+	}
+	defer releaseAdmission()
+	if err := m.reserveWorkspaceOwner(ctx, rec.ID, ws.Path); err != nil {
+		return RestoreResult{}, err
+	}
 	if m.chat == nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w: chat mode is not available in this build",
 			operation, rec.ID, ports.ErrChatUnsupported)
