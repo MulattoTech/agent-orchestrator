@@ -594,3 +594,43 @@ func TestUncertainReportKeepsGlobalAdmissionLeaseAfterRecovery(t *testing.T) {
 		t.Fatalf("recovery released uncertain admission: %+v %v", snapshot, err)
 	}
 }
+
+func TestStandaloneReportHandoffDoesNotPreserveFrozenInputAmbiguity(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "running task", ClientMessageID: "frozen-active"}); err != nil {
+		t.Fatal(err)
+	}
+	seedPiggybackReport(t, h, "frozen-report")
+	reports, err := h.st.ClaimPendingReportBatch(ctx, testProject, "frozen-claim", h.now())
+	if err != nil || len(reports) != 1 {
+		t.Fatalf("claim=%+v %v", reports, err)
+	}
+	batch := reportsvc.PreparedBatch{ProjectID: testProject, Token: "frozen-claim", ID: reports[0].DeliveryBatchID, Reports: reports}
+	id, err := h.svc.RelaySessionChatTurn(ctx, testSession, batch.Render(), batch.IdempotencyKey(), ports.MessageDeliveryOptions{ReportDelivery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.AcknowledgeReportBatch(ctx, testProject, batch.Token, h.now()); err != nil {
+		t.Fatal(err)
+	}
+	// A nonempty frozen input means the old dispatch may have crossed the
+	// provider boundary. Preserve its body, but never treat it as resumable.
+	if err := h.st.RecordProviderInput(ctx, id, batch.Render()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.CancelAllQueuedTurns(ctx, h.ctrl.ConversationID(), h.now()); err != nil {
+		t.Fatal(err)
+	}
+	turn, err := h.st.TurnByID(ctx, id)
+	if err != nil || turn.State != domain.TurnStateInterrupted || turn.ProviderInputText != batch.Render() {
+		t.Fatalf("ambiguous report=%+v %v", turn, err)
+	}
+	report, _, _ := h.st.GetReport(ctx, "frozen-report")
+	if report.DeliveryState != domain.ReportAcknowledged {
+		t.Fatal("handoff released uncertain report for duplicate delivery")
+	}
+	if len(h.conv.sentMessages()) != 1 {
+		t.Fatal("handoff dispatched uncertain report")
+	}
+}

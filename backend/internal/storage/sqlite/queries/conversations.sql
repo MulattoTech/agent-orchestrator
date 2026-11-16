@@ -1275,6 +1275,7 @@ WHERE conversation_turns.conversation_id = ? AND conversation_turns.state = 'que
         AND conversation_messages.origin = 'automation'
         AND conversation_messages.client_message_id LIKE 'report-batch:%'
         AND conversation_turns.provider_turn_id = ''
+        AND conversation_turns.provider_input_text = ''
         AND conversation_turns.promotion_started_at IS NULL
   );
 
