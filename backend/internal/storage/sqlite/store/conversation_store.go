@@ -1858,7 +1858,8 @@ func terminalActivityStatus(state domain.TurnState) domain.ActivityStatus {
 
 // SettleOrphanedTurns marks anything a dead controller left in flight. A turn the
 // controller was running is not evidence the work finished, so it settles as
-// failed rather than silently completing. Proven undispatched queue rows remain\n// durable for a replacement controller; explicit user cancellation is separate.
+// failed rather than silently completing. Proven undispatched queue rows remain
+// durable for a replacement controller; explicit user cancellation is separate.
 func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()

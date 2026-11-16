@@ -1879,7 +1879,8 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 	select {
 	case <-controller.stopped:
 		if hibernating {
-			// Explicit Kill settles ambiguous work that idle shutdown preserved.\n            // Proven undispatched messages remain durable until user cancellation.
+			// Explicit Kill settles ambiguous work that idle shutdown preserved.
+			// Proven undispatched messages remain durable until user cancellation.
 			err = errors.Join(err, controller.cleanupOwnedControllerWork(ctx, s.now()))
 		}
 		s.mu.Lock()
