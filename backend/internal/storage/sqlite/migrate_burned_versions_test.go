@@ -268,6 +268,8 @@ var shippedMigrations = map[int64]string{
 	20261114072016988: "20261114072016988_drop_session_account_pins.sql",
 	20261114182101000: "20261114182101000_session_accepted_delivery.sql",
 	20261116040000629: "20261116040000629_session_admission_queue.sql",
+
+	20261116060406021: "20261116060406021_review_publication_attempt.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

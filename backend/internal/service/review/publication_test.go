@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -14,6 +15,7 @@ type publicationFakeStore struct {
 	*fakeStore
 	failReceipt bool
 	receipts    int
+	attempt     domain.ReviewPublicationAttempt
 }
 
 func (s *publicationFakeStore) RecordReviewPublication(_ context.Context, id, sha, receipt string) (bool, error) {
@@ -27,6 +29,31 @@ func (s *publicationFakeStore) RecordReviewPublication(_ context.Context, id, sh
 	s.run.GithubReviewID = receipt
 	s.receipts++
 	return true, nil
+}
+
+func (s *publicationFakeStore) ClaimReviewPublication(_ context.Context, run domain.ReviewRun, now time.Time) (domain.ReviewPublicationAttempt, bool, error) {
+	if s.run.ID != run.ID || s.run.Body != run.Body || s.run.TargetSHA != run.TargetSHA || s.run.Verdict != run.Verdict {
+		return domain.ReviewPublicationAttempt{}, false, domain.ErrReviewPublicationConflict
+	}
+	claimed := s.attempt.RunID == "" || s.attempt.State == "ready"
+	if claimed {
+		s.attempt = domain.ReviewPublicationAttempt{RunID: run.ID, ClaimID: "claim-1", State: "uncertain", AttemptCount: s.attempt.AttemptCount + 1, AttemptedAt: now}
+	}
+	return s.attempt, claimed, nil
+}
+func (s *publicationFakeStore) ReleaseReviewPublicationPrewrite(_ context.Context, id, claim string) (bool, error) {
+	if s.attempt.RunID != id || s.attempt.ClaimID != claim || s.attempt.State != "uncertain" {
+		return false, nil
+	}
+	s.attempt.State = "ready"
+	return true, nil
+}
+func (s *publicationFakeStore) CompleteReviewPublication(ctx context.Context, run domain.ReviewRun, receipt ports.SCMReviewPublicationReceipt, _ time.Time) (bool, error) {
+	ok, err := s.RecordReviewPublication(ctx, run.ID, run.TargetSHA, receipt.ReviewID)
+	if ok && err == nil {
+		s.attempt.State = "published"
+	}
+	return ok, err
 }
 
 type fakeSavedReviewPublisher struct {
@@ -43,10 +70,17 @@ func (p *fakeSavedReviewPublisher) PublishReview(_ context.Context, req ports.SC
 	}
 	reused := p.posted || req.ExistingReviewID != ""
 	if !reused {
+		if !req.AllowCreate {
+			return ports.SCMReviewPublicationReceipt{}, ports.ErrSCMReviewPublicationUncertain
+		}
 		p.posts++
 		p.posted = true
 	}
-	return ports.SCMReviewPublicationReceipt{ReviewID: "991", TargetSHA: req.TargetSHA, State: "COMMENTED", Reused: reused}, nil
+	receiptID := "991"
+	if req.ExistingReviewID != "" {
+		receiptID = req.ExistingReviewID
+	}
+	return ports.SCMReviewPublicationReceipt{ReviewID: receiptID, TargetSHA: req.TargetSHA, State: "COMMENTED", Reused: reused}, nil
 }
 func publicationFixture() (*publicationFakeStore, *fakeSavedReviewPublisher, *Service) {
 	const sha = "1111111111111111111111111111111111111111"
@@ -131,5 +165,21 @@ func TestSubmitAttachesLateVerifiedReceiptWithoutChangingVerdict(t *testing.T) {
 	}
 	if _, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "different", "991"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("changed result accepted: %v", err)
+	}
+}
+
+func TestInitialSubmitCannotTrustAnUnverifiedReceipt(t *testing.T) {
+	store, publisher, svc := publicationFixture()
+	store.run.Status, store.run.Verdict, store.run.Body = domain.ReviewRunRunning, domain.VerdictNone, ""
+	publisher.err = ports.ErrSCMNotFound
+	if _, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictApproved, "durable first", "991"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unverified receipt accepted: %v", err)
+	}
+	if store.run.Status != domain.ReviewRunComplete || store.run.Verdict != domain.VerdictApproved ||
+		store.run.Body != "durable first" || store.run.GithubReviewID != "" {
+		t.Fatalf("local result not preserved independently: %+v", store.run)
+	}
+	if publisher.posts != 0 || len(publisher.calls) != 1 || publisher.calls[0].AllowCreate || publisher.calls[0].ExistingReviewID != "991" {
+		t.Fatalf("submit bypassed read-only publication verification: %+v", publisher.calls)
 	}
 }

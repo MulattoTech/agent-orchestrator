@@ -134,7 +134,7 @@ func TestReviewFunnelReachesTheWireWithItsProperties(t *testing.T) {
 	}
 	reviewBody := "rename the credential loader in src/config/prod.ts"
 	if _, err := svc.Submit(context.Background(), "worker-1", "run-1",
-		domain.VerdictChangesRequested, reviewBody, "gh-review-42"); err != nil {
+		domain.VerdictChangesRequested, reviewBody, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	closeSink()
@@ -158,7 +158,7 @@ func TestReviewFunnelReachesTheWireWithItsProperties(t *testing.T) {
 		"verdict":            "changes_requested",
 		"harness":            "claude-code",
 		"trigger":            "auto",
-		"posted_to_provider": true,
+		"posted_to_provider": false,
 		"duration_ms":        float64(90_000), // JSON numbers decode as float64
 		"body_bytes":         float64(len(reviewBody)),
 	} {

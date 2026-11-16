@@ -697,6 +697,23 @@ type Review struct {
 	IsArchived             bool
 }
 
+type ReviewPublicationAttempt struct {
+	RunID            string
+	SessionID        string
+	PRURL            string
+	TargetSha        string
+	Verdict          string
+	Body             string
+	ClaimID          string
+	State            string
+	AttemptCount     int64
+	AttemptedAt      time.Time
+	ProviderReviewID string
+	ProviderState    string
+	ProviderURL      string
+	CompletedAt      sql.NullTime
+}
+
 type ReviewRun struct {
 	ID               string
 	ReviewID         string
