@@ -165,3 +165,36 @@ fairness, and one dispatch after an exact merged fact. Owner-approved artifact
 acceptance and full requirements DAGs still require a separate authoritative
 outcome interface. Global CI/test/tool subprocess semaphores are not implemented
 by worker admission or the inference gate.
+
+## AO-owned workspace shell admission
+
+Setup and Cleanup commands now acquire a separate permit immediately before the
+shell is constructed and cmd.Run executes. The default is two owned shells across
+this daemon process and one per project. AO_MAX_WORKSPACE_SCRIPTS and
+AO_MAX_PROJECT_WORKSPACE_SCRIPTS accept integers 1 through 40; the project value
+must not exceed the global value. Invalid controls fail closed with
+WORKSPACE_SCRIPT_POLICY_INVALID before any shell starts. These controls are
+independent of worker slots and simultaneous inference. All Manager Setup paths
+and the managed Cleanup path supply the trusted project identity.
+
+Waiters honor context cancellation without reserving a global slot while their
+project is full. Success, start failure, nonzero exit and cancellation release the
+permit once cmd.Run returns. The gate never retries an arbitrary side-effecting
+command. Setup already stops on its first failed step. The accepted workspace
+cleanup operation has its separately recorded bounded retry policy described
+above; the shell admission layer adds no retries.
+
+WorkspaceScriptSnapshot() exposes active/waiting owned shells, global/project
+limits and project occupancy. DescendantProcesses remains null. This is a cap on
+AO-owned workspace shell invocations in one daemon, not a general CI/test resource
+semaphore. Provider-native commandExecution notifications arrive after Codex owns
+the execution; optional approval messages are not a universal dispatch boundary.
+User Cue commands are delivered into persistent terminals and acknowledge
+consumption, not command completion. Neither path passes through this gate.
+
+On Windows, ConfigureTreeCancellation currently uses taskkill for cancellation;
+it does not place these commands in crash-bound Job Objects. A detached child may
+survive shell completion or daemon crash, so the gate cannot prove a global bound
+on descendant processes across restart. Adding that ownership/recovery authority
+and a provider-native tool adapter remains necessary before claiming a fleet-wide
+CI/test cap or a generic tool failure retry budget.

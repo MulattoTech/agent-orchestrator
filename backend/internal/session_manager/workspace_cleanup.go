@@ -91,6 +91,7 @@ func ReplacementCleanupBudget(project domain.ProjectRecord) time.Duration {
 }
 
 func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.ProjectID, workspacePath string) error {
+	ctx = withWorkspaceScriptProject(ctx, projectID)
 	if workspacePath == "" {
 		return nil
 	}
@@ -161,6 +162,11 @@ var runCleanupStep = runWorkspaceStep
 // and cleanup. WaitDelay bounds orphaned output pipes after shell exit or
 // cancellation; it does not impose a time limit on the running command.
 func runWorkspaceStep(ctx context.Context, workspacePath, command string, env map[string]string, output io.Writer) error {
+	release, err := acquireWorkspaceScript(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	cmd := workspaceStepCommand(ctx, command)
 	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.Dir = workspacePath
@@ -170,7 +176,7 @@ func runWorkspaceStep(ctx context.Context, workspacePath, command string, env ma
 	}
 	cmd.WaitDelay = time.Second
 	cmd.Stdout, cmd.Stderr = output, output
-	err := cmd.Run()
+	err = cmd.Run()
 	// A successful shell can leave a detached child holding its output pipes.
 	// WaitDelay closes those pipes; it must not turn that shell success into a
 	// script failure. Real exit errors and daemon cancellation still fail.
