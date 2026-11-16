@@ -236,6 +236,10 @@ func TestAdmissionNativeWindowsFortyProcessesRecover(t *testing.T) {
 		}
 		t.Logf("NATIVE_FAKE_FLEET slots=%d processes=%d projects=3 rss_bytes=%d cpu_seconds=%.4f available_bytes=%d pids=%v provider_calls=0", stage, len(tree.Processes), tree.RSSBytes, tree.CPUSeconds, sys.AvailableBytes, pids)
 	}
+	healthy, healthErr := f.manager.HealthSnapshot(ctx)
+	if healthErr != nil || healthy.Status != "HEALTHY" || healthy.VerifiedRuntimeProcesses != 40 {
+		t.Fatal(healthy, healthErr)
+	}
 	victim := sessions[0]
 	dirtyPath := filepath.Join(victim.Metadata.WorkspacePath, "owner-dirty.txt")
 	before := []byte("Native Windows fake worker dirty-content preservation\n")
@@ -259,6 +263,11 @@ func TestAdmissionNativeWindowsFortyProcessesRecover(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-old.done
+	missing, healthErr := f.manager.HealthSnapshot(ctx)
+	if healthErr != nil || missing.Status != "DEGRADED" || missing.MissingControllers != 1 || missing.VerifiedRuntimeProcesses != 39 {
+		t.Fatal(missing, healthErr)
+	}
+	t.Logf("NATIVE_FAKE_HEALTH before=%s after=%s absent=%d verified_runtime_processes=%d provider_calls=0", healthy.Status, missing.Status, missing.MissingControllers, missing.VerifiedRuntimeProcesses)
 	if err := f.store.Close(); err != nil {
 		t.Fatal(err)
 	}
