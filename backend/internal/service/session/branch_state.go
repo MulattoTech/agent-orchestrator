@@ -107,7 +107,7 @@ func (s *Service) reconcileBranchStates(ctx context.Context, writer branchStateW
 			project = projectLookup{rec: p, ok: ok}
 			projects[rec.ProjectID] = project
 		}
-		if project.ok && project.rec.Kind.WithDefault() == domain.ProjectKindWorkspace {
+		if project.ok && (project.rec.Kind.WithDefault() == domain.ProjectKindWorkspace || project.rec.Kind.WithDefault() == domain.ProjectKindScratch) {
 			continue
 		}
 		commonDir, branch, head, ok := readGitHead(rec.Metadata.WorkspacePath)

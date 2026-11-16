@@ -99,3 +99,19 @@ func TestBranchStateExplicitReadFailureDoesNotEraseFacts(t *testing.T) {
 		t.Fatalf("failed explicit read mutated facts: writes=%d commands=%v state=%+v", st.writes, effects.outputs, st.sessions["one"].BranchState)
 	}
 }
+
+func TestBranchStateSkipsExplicitScratchProjectEvenWithGitDirectory(t *testing.T) {
+	t.Setenv("PATH", "")
+	root := branchStateEffectWorkspace(t)
+	st := &branchStateStore{fakeStore: newFakeStore()}
+	st.projects["scratch"] = domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Path: root}
+	st.sessions["one"] = domain.SessionRecord{ID: "one", ProjectID: "scratch", Metadata: domain.SessionMetadata{WorkspacePath: root}}
+	effects := &branchStateEffectFixture{fail: true}
+	svc := NewWithDeps(Deps{Store: st, BranchStateGit: effects})
+	if err := svc.ReconcileBranchStates(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(effects.outputs) != 0 || effects.conflicts != 0 || st.writes != 0 {
+		t.Fatalf("scratch observation invoked Git or persisted invented branch facts: commands=%v conflicts=%d writes=%d", effects.outputs, effects.conflicts, st.writes)
+	}
+}
