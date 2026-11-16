@@ -242,5 +242,6 @@ foreach ($role in @('orchestrator', 'implementation', 'complex', 'reviewer', 'li
         if ($model -match '(?i)luna') { throw 'Template prematurely permits Luna.' }
     }
 }
-Write-Output "PASS: parsed $($asts.Count) PowerShell scripts; build is compile-only, fleet/ConPTY/daemon arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
-Write-Output 'Scope: AST/static validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'
+& (Join-Path $PSScriptRoot 'Test-CandidateACLDiagnostics.ps1')
+Write-Output "PASS: parsed $($asts.Count) PowerShell scripts and verified synthetic ACL decisions; build is compile-only, fleet/ConPTY/daemon arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
+Write-Output 'Scope: AST/static and in-memory synthetic descriptor validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'
