@@ -2523,7 +2523,8 @@ func TestCustomModelProviderSkipsCodexAccountCheck(t *testing.T) {
 	manager := newCodexAccountManager(context.Background(), filepath.Join(root, "accounts"), filepath.Join(root, "pending"), filepath.Join(root, "staging"), globalHome, nil, nil)
 	manager.accountStoreReady = true
 	manager.factory = &fakeCodexAccountFactory{capabilities: supportedCodexAccountCapabilities()}
-	service := &Service{codexAccounts: manager, readiness: newReadinessCoordinator(readinessCoordinatorConfig{})}
+	service := newService(nil, nil, nil)
+	service.codexAccounts = manager
 	if err := manager.reconcileGlobal(context.Background()); err != nil {
 		t.Fatal(err)
 	}

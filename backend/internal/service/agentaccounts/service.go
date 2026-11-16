@@ -58,10 +58,11 @@ type Service struct {
 	root      string // account folders live in root/<provider>/<id>
 	terminals Terminals
 	// stopAgents stops every running agent on an account before it is removed.
-	stopAgents func(context.Context, string) error
-	limitLog   ports.AgentLimitReadingStore
-	log        *slog.Logger
-	now        func() time.Time
+	stopAgents                   func(context.Context, string) error
+	limitLog                     ports.AgentLimitReadingStore
+	log                          *slog.Logger
+	now                          func() time.Time
+	usesCustomCodexModelProvider func() bool
 
 	mu       sync.Mutex
 	readings map[string]*reading
@@ -146,6 +147,10 @@ type login struct {
 // New builds the service. root must be absolute; the account folders' paths
 // are stored exactly, because Claude keys each folder's login on the path text.
 func New(store ports.AgentAccountStore, providers []ports.AgentAccountProviderCLI, root string, terminals Terminals, log *slog.Logger) *Service {
+	return newWithProviderConfig(store, providers, root, terminals, log, codexagent.UsesCustomModelProvider)
+}
+
+func newWithProviderConfig(store ports.AgentAccountStore, providers []ports.AgentAccountProviderCLI, root string, terminals Terminals, log *slog.Logger, usesCustomCodexModelProvider func() bool) *Service {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
@@ -155,7 +160,8 @@ func New(store ports.AgentAccountStore, providers []ports.AgentAccountProviderCL
 	}
 	return &Service{
 		store: store, providers: byProvider, root: filepath.Clean(root), terminals: terminals, log: log,
-		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{}, lastOrg: map[string]seenOrg{},
+		usesCustomCodexModelProvider: usesCustomCodexModelProvider,
+		now:                          func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{}, lastOrg: map[string]seenOrg{},
 	}
 }
 
@@ -635,7 +641,7 @@ func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountPr
 		return domain.AgentAccount{}, err
 	}
 	// A custom Codex model provider does not use the account's sign-in.
-	if p == domain.AgentAccountProviderCodex && codexagent.UsesCustomModelProvider() {
+	if p == domain.AgentAccountProviderCodex && s.usesCustomCodexModelProvider() {
 		return account, nil
 	}
 	r := s.cachedReading(account.ID)
