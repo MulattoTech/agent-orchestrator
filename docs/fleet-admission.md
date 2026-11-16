@@ -118,3 +118,9 @@ runtime children; runningToolProcesses remains null without a descendant
 observer. Intentionally stopped, hibernated and provisioning sessions are shown
 separately. The native Windows fixture verifies HEALTHY changes to DEGRADED
 after one owned child exits, before any reconciliation changes durable state.
+
+Queued restore identity uses CleanupGeneration, the monotonic terminal/restore
+episode counter. Renaming or reconciling metadata while a restore waits does not
+invalidate it. An intervening restore followed by a new archive changes that
+generation, so the earlier queued restore blocks instead of reviving work the
+owner subsequently stopped.

@@ -289,12 +289,14 @@ func (m *Manager) queueRestoreAdmission(ctx context.Context, rec domain.SessionR
 	if !ok || !enabled {
 		return cause
 	}
-	sum := sha256.Sum256([]byte("restore:" + string(rec.ID) + ":" + rec.UpdatedAt.UTC().Format(time.RFC3339Nano)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("restore:%s:%d", rec.ID, rec.CleanupGeneration)))
 	id := "admit-" + hex.EncodeToString(sum[:16])
+	// Metadata timestamps can change during harmless rename/reconciliation.
+	// The monotonic terminal episode is the restore intent's ownership fence.
 	body, err := json.Marshal(struct {
-		ID        domain.SessionID
-		UpdatedAt time.Time
-	}{rec.ID, rec.UpdatedAt})
+		ID                domain.SessionID
+		CleanupGeneration int64
+	}{rec.ID, rec.CleanupGeneration})
 	if err != nil {
 		return err
 	}
@@ -455,8 +457,8 @@ func (m *Manager) DispatchAdmissionQueue(ctx context.Context, maxClaims int) err
 			}
 		case "restore":
 			var wanted struct {
-				ID        domain.SessionID
-				UpdatedAt time.Time
+				ID                domain.SessionID
+				CleanupGeneration int64
 			}
 			if err = json.Unmarshal([]byte(request.Payload), &wanted); err == nil {
 				var found bool
@@ -464,7 +466,7 @@ func (m *Manager) DispatchAdmissionQueue(ctx context.Context, maxClaims int) err
 				if err == nil && !found {
 					err = ErrNotFound
 				}
-				if err == nil && session.IsTerminated && !session.UpdatedAt.Equal(wanted.UpdatedAt) {
+				if err == nil && session.IsTerminated && session.CleanupGeneration != wanted.CleanupGeneration {
 					err = errors.New("STALE_RESTORE_REQUEST")
 				}
 				if err == nil && session.IsTerminated {

@@ -557,3 +557,84 @@ func TestAdmissionRejectsUnknownSessionKind(t *testing.T) {
 		t.Fatal(live)
 	}
 }
+
+func TestAdmissionQueuedRestoreUsesLifecycleGeneration(t *testing.T) {
+	for _, changedEpisode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("changedEpisode=%t", changedEpisode), func(t *testing.T) {
+			f := newAdmissionFixture(t, 1, true)
+			ctx := context.Background()
+			archived, _, _, err := f.manager.Spawn(ctx, admissionSpawn("red"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dirty := filepath.Join(archived.Metadata.WorkspacePath, "owner-dirty.txt")
+			if err := os.WriteFile(dirty, []byte("queued restore work remains owned"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.manager.Kill(ctx, archived.ID); err != nil {
+				t.Fatal(err)
+			}
+			occupied, _, _, err := f.manager.Spawn(ctx, admissionSpawn("blue"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.manager.RestoreWithMode(ctx, archived.ID); !errors.Is(err, ErrSessionQueued) {
+				t.Fatal(err)
+			}
+			queuedBefore, err := f.manager.ListAdmissionQueue(ctx)
+			if err != nil || len(queuedBefore) != 1 {
+				t.Fatal(queuedBefore, err)
+			}
+			renamed, found, err := f.store.GetSession(ctx, archived.ID)
+			if err != nil || !found {
+				t.Fatal(err)
+			}
+			renamed.DisplayName = "renamed while capacity is full"
+			renamed.UpdatedAt = renamed.UpdatedAt.Add(time.Second)
+			if err := f.store.UpdateSession(ctx, renamed); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.manager.RestoreWithMode(ctx, archived.ID); !errors.Is(err, ErrSessionQueued) {
+				t.Fatal(err)
+			}
+			requests, err := f.manager.ListAdmissionQueue(ctx)
+			if err != nil || len(requests) != 1 || requests[0].ID != queuedBefore[0].ID {
+				t.Fatal("metadata edit changed restore identity", requests, err)
+			}
+			if _, err := f.manager.Kill(ctx, occupied.ID); err != nil {
+				t.Fatal(err)
+			}
+			if changedEpisode {
+				if _, err := f.manager.RestoreWithMode(ctx, archived.ID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.manager.Kill(ctx, archived.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := f.manager.DispatchAdmissionQueue(ctx, 1); err != nil {
+				t.Fatal(err)
+			}
+			requests, err = f.manager.ListAdmissionQueue(ctx)
+			if err != nil || len(requests) != 1 {
+				t.Fatal(requests, err)
+			}
+			if changedEpisode {
+				if requests[0].State != "blocked" {
+					t.Fatal("stale episode resurrected", requests)
+				}
+				if live, _ := f.rt.counts(); live != 0 {
+					t.Fatal(live)
+				}
+			} else {
+				if requests[0].State != "completed" || requests[0].SessionID != archived.ID {
+					t.Fatal("metadata rename blocked valid restore", requests)
+				}
+				if live, _ := f.rt.counts(); live != 1 {
+					t.Fatal(live)
+				}
+			}
+			mtechAssertDirtyContent(t, dirty, []byte("queued restore work remains owned"))
+		})
+	}
+}
