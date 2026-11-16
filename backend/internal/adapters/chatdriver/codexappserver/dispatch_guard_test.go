@@ -270,3 +270,51 @@ func TestInferenceGuardChildCompletionCannotReleaseRootLease(t *testing.T) {
 		t.Fatal("child completion changed root guard lease")
 	}
 }
+
+func TestInferenceGuardStaleRootStartCannotBindPendingRequest(t *testing.T) {
+	d, _, cfg := guardedDriver(t)
+	conv, err := d.Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	c := conv.(*conversation)
+	sel, err := c.guard.Resolve(c.guardRole, c.guardSession, "gpt-test", "medium")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.guard.Dispatch(context.Background(), inferenceguard.Request{ID: "new-pending-request", Session: c.guardSession, Project: c.guardProject, Operation: "turn/start", Selection: sel}, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	c.guardRequest = "new-pending-request"
+	c.guardTurn = ""
+	c.mu.Unlock()
+	c.observeGuardEvent(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderConversationID: "thread-1", ProviderTurnID: "stale-root"})
+	c.observeGuardEvent(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderConversationID: "thread-1", ProviderTurnID: "stale-root", TurnState: domain.TurnStateCompleted})
+	c.mu.Lock()
+	current, native := c.guardRequest, c.guardTurn
+	c.mu.Unlock()
+	s, err := c.guard.Snapshot(context.Background())
+	if err != nil || current != "new-pending-request" || native != "" || s.Active != 1 {
+		t.Fatalf("stale replay released new work: request=%s native=%s %+v %v", current, native, s, err)
+	}
+}
+func TestInferenceGuardInternalRPCErrorKeepsUncertainLease(t *testing.T) {
+	d, srv, cfg := guardedDriver(t)
+	srv.replyError("turn/start", -32603, "synthetic acknowledgement failed after acceptance")
+	conv, err := d.Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	_, err = conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "fake accepted request", ClientMessageID: "unknown-ack"})
+	if err == nil {
+		t.Fatal("expected synthetic RPC error")
+	}
+	c := conv.(*conversation)
+	s, err := c.guard.Snapshot(context.Background())
+	if err != nil || s.Uncertain != 1 || s.Completed != 0 || s.BudgetUsed != 1 {
+		t.Fatalf("unknown outcome freed lease: %+v %v", s, err)
+	}
+}
