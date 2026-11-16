@@ -27,6 +27,9 @@ if (-not $commonText.Contains('function Initialize-CandidateReleaseRoot') -or
     $commonText.Contains('C:\AODev\releases')) {
     throw 'Candidate release root must be protected, verified and independent of AODev.'
 }
+if (-not $sources['Build-Candidate.ps1'].Contains('''Test-CandidateACLDiagnostics.ps1''')) {
+    throw 'Release build must package the synthetic ACL behavioral tests.'
+}
 if (-not $sources['Build-Candidate.ps1'].Contains('$releaseParent = Initialize-CandidateReleaseRoot')) {
     throw 'Build must initialize the private release root before compilation.'
 }
