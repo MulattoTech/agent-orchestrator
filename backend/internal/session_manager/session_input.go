@@ -52,9 +52,15 @@ func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok b
 	m.agentOpMu.Unlock()
 
 	var once sync.Once
-	return func() {
+	release = func() {
 		once.Do(func() { m.releaseSessionInput(id) })
-	}, true
+	}
+	// Re-read policy while this lease fences mode/provider mutations.
+	if !m.sessionInputPolicyAllows(id) {
+		release()
+		return nil, false
+	}
+	return release, true
 }
 
 func (m *Manager) releaseSessionInput(id domain.SessionID) {

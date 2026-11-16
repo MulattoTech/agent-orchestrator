@@ -17,6 +17,9 @@ import (
 // handoff note: native histories cannot be merged across harnesses.
 func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) error {
 	target := request.TargetHarness
+	if err := checkSessionLaunchPolicy(target, domain.SessionModeTUI); err != nil {
+		return err
+	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationProviderSwitch); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "another session operation is in progress", Cause: err}

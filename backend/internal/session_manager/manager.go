@@ -1201,6 +1201,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
 	mode := m.resolveSessionMode(ctx, cfg.Kind, cfg.RequestedMode)
+	if err := checkSessionLaunchPolicy(cfg.Harness, mode); err != nil {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+	}
 	if mode == domain.SessionModeChat && m.chat != nil && cfg.AgentConfig.Permissions == "" &&
 		effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config).Permissions == "" {
 		// Auto is AO's generic default, not a provider capability. An agent
@@ -1249,6 +1252,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.AgentConfig = resolved
 			cfg.AgentConfigResolved = true
 		}
+	}
+	// Recheck the resolved surface after any default Chat fallback.
+	if err := checkSessionLaunchPolicy(cfg.Harness, mode); err != nil {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 	}
 	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "") {
 		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
@@ -3331,6 +3338,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotFound)
 	}
+	if err := checkSessionLaunchPolicy(rec.Harness, rec.Mode); err != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+	}
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
@@ -3687,6 +3697,9 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrNotFound)
 	}
+	if err := checkSessionLaunchPolicy(rec.Harness, rec.Mode); err != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
+	}
 	if rec.HibernatedAt != nil && m.persistentHostReconcileDone != nil {
 		select {
 		case <-m.persistentHostReconcileDone:
@@ -3922,6 +3935,9 @@ func (m *Manager) relaunchSessionWithPolicy(
 }
 
 func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy, promptOverride *string) (RestoreResult, error) {
+	if err := checkSessionLaunchPolicy(rec.Harness, rec.Mode); err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	}
 	ctx, _, releaseAdmission, admissionErr := m.reserveSessionAdmission(ctx, rec.ProjectID, rec.Kind, rec.ID)
 	if admissionErr != nil {
 		return RestoreResult{}, admissionErr

@@ -1065,6 +1065,9 @@ func (m *Manager) preflightInterfaceTarget(
 	rec domain.SessionRecord,
 	transition domain.SessionInterfaceTransition,
 ) error {
+	if err := checkSessionLaunchPolicy(rec.Harness, transition.TargetMode); err != nil {
+		return err
+	}
 	if transition.TargetMode == domain.SessionModeChat {
 		if m.chat == nil {
 			return ports.ErrChatUnsupported
@@ -1122,6 +1125,9 @@ func (m *Manager) preflightTerminalLaunch(
 	project domain.ProjectRecord,
 	nativeConversationID string,
 ) error {
+	if err := checkSessionLaunchPolicy(rec.Harness, domain.SessionModeTUI); err != nil {
+		return err
+	}
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
 		return err
