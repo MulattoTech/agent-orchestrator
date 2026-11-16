@@ -18,26 +18,28 @@ import (
 )
 
 type Request struct {
-	ID        string
-	Session   string
-	Project   string
-	Operation string
-	Selection Selection
+	NativeThreadID string
+	ID             string
+	Session        string
+	Project        string
+	Operation      string
+	Selection      Selection
 }
 type Gate struct {
-	path      string
-	owner     *datadirlock.Lock
-	closeOnce sync.Once
-	closeErr  error
-	mu        sync.Mutex
-	blocked   atomic.Bool
-	stopMu    sync.Mutex
-	stopNext  uint64
-	stoppers  map[uint64]func(context.Context) error
-	stopping  atomic.Bool
-	db        *sql.DB
-	policy    func() (Policy, error)
-	now       func() time.Time
+	path          string
+	owner         *datadirlock.Lock
+	closeOnce     sync.Once
+	closeErr      error
+	mu            sync.Mutex
+	blocked       atomic.Bool
+	policyBlocked atomic.Bool
+	stopMu        sync.Mutex
+	stopNext      uint64
+	stoppers      map[uint64]func(context.Context) error
+	stopping      atomic.Bool
+	db            *sql.DB
+	policy        func() (Policy, error)
+	now           func() time.Time
 }
 
 var gates struct {
@@ -168,6 +170,20 @@ CREATE TABLE IF NOT EXISTS authority(
  updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS account_binding(id INTEGER PRIMARY KEY CHECK(id=1),native_sha256 TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS policy_violations(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,provider_turn_id TEXT NOT NULL,
+ expected_model TEXT NOT NULL,expected_effort TEXT NOT NULL,observed_model TEXT NOT NULL,observed_effort TEXT NOT NULL,
+ detected_at TEXT NOT NULL,reviewed_at TEXT NOT NULL DEFAULT '',review_owner TEXT NOT NULL DEFAULT '',review_reason TEXT NOT NULL DEFAULT '',
+ UNIQUE(session_id,provider_turn_id,observed_model,observed_effort)
+);
+CREATE TABLE IF NOT EXISTS native_thread_bindings(
+ session_id TEXT NOT NULL,thread_id TEXT NOT NULL,account_key TEXT NOT NULL,
+ created_at TEXT NOT NULL,last_observed_at TEXT NOT NULL,
+ PRIMARY KEY(session_id,thread_id)
+);
+CREATE TABLE IF NOT EXISTS native_attempt_threads(
+ attempt_id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,account_key TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS attempts(
  id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_id TEXT NOT NULL,
  account_key TEXT NOT NULL, epoch TEXT NOT NULL, role TEXT NOT NULL,
@@ -248,6 +264,14 @@ func (g *Gate) Dispatch(ctx context.Context, r Request, write func() error) erro
 	if r.ID == "" || r.Session == "" || r.Operation == "" || write == nil {
 		return deny(ErrPolicy, "dispatch identity is incomplete")
 	}
+	if p.NativeAccountSHA256 != "" && r.NativeThreadID == "" {
+		return deny(ErrPolicy, "verified native dispatch requires a native thread identity")
+	}
+	if r.NativeThreadID != "" {
+		if err := g.verifyNativeThread(ctx, p, r.Session, r.NativeThreadID); err != nil {
+			return err
+		}
+	}
 	tx, err := g.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -286,6 +310,16 @@ func (g *Gate) Dispatch(ctx context.Context, r Request, write func() error) erro
 		}
 		return e
 	}
+	var status string
+	if err = tx.QueryRowContext(ctx, "SELECT status FROM authority WHERE id=1").Scan(&status); err != nil {
+		return err
+	}
+	if status != "UNKNOWN" && status != "AVAILABLE" && status != "EXHAUSTED" && status != "POLICY_VIOLATION" {
+		return refusal(deny(ErrPolicy, "unrecognized durable authority state"))
+	}
+	if g.policyBlocked.Load() || status == "POLICY_VIOLATION" {
+		return refusal(deny(ErrPolicy, "observed native policy violation requires explicit owner review"))
+	}
 	if g.blocked.Load() {
 		return refusal(deny(ErrQuota, "provider exhaustion observed; lockout is latched"))
 	}
@@ -295,12 +329,17 @@ func (g *Gate) Dispatch(ctx context.Context, r Request, write func() error) erro
 	if p.Pause {
 		return refusal(deny(ErrQuota, "owner soft pause; work remains queued"))
 	}
-	var status string
-	if err = tx.QueryRowContext(ctx, "SELECT status FROM authority WHERE id=1").Scan(&status); err != nil {
-		return err
-	}
 	if status == "EXHAUSTED" {
 		return refusal(deny(ErrQuota, "global provider/account lockout; reset time alone does not authorize retries"))
+	}
+	if r.NativeThreadID != "" {
+		var occupied bool
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM native_attempt_threads n JOIN attempts a ON a.id=n.attempt_id WHERE n.thread_id=? AND a.state IN ('active','uncertain'))", r.NativeThreadID).Scan(&occupied); err != nil {
+			return err
+		}
+		if occupied {
+			return refusal(deny(ErrCapacity, "native thread already has an active or uncertain governed request"))
+		}
 	}
 	var spent, active, projectActive, reviews, sessionActive int
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM attempts WHERE epoch=? AND dispatched_at<>''", p.AuthorizationEpoch).Scan(&spent); err != nil {
@@ -317,6 +356,11 @@ func (g *Gate) Dispatch(ctx context.Context, r Request, write func() error) erro
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE attempts SET state='active',dispatched_at=?,epoch=?,exception_id=? WHERE id=? AND state='queued'", now, p.AuthorizationEpoch, selected.ExceptionID, r.ID); err != nil {
 		return err
+	}
+	if r.NativeThreadID != "" {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO native_attempt_threads(attempt_id,thread_id,account_key) VALUES(?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET thread_id=excluded.thread_id,account_key=excluded.account_key", r.ID, r.NativeThreadID, p.AccountKey); err != nil {
+			return err
+		}
 	}
 	resolution, err := json.Marshal(selected)
 	if err != nil {
@@ -392,7 +436,7 @@ func (g *Gate) Trip(ctx context.Context, resetAt time.Time, source string) error
 		reset = resetAt.UTC().Format(time.RFC3339Nano)
 	}
 	// Later unstructured errors must not erase an earlier authoritative reset.
-	_, err := g.db.ExecContext(ctx, "UPDATE authority SET status='EXHAUSTED',reset_at=CASE WHEN ?<>'' AND (reset_at='' OR ?>reset_at) THEN ? ELSE reset_at END,reset_source=CASE WHEN ?<>'' AND (reset_at='' OR ?>reset_at) OR reset_at='' THEN ? ELSE reset_source END,updated_at=? WHERE id=1", reset, reset, reset, reset, reset, source, g.now().UTC().Format(time.RFC3339Nano))
+	_, err := g.db.ExecContext(ctx, "UPDATE authority SET status=CASE WHEN status='POLICY_VIOLATION' THEN status ELSE 'EXHAUSTED' END,reset_at=CASE WHEN ?<>'' AND (reset_at='' OR ?>reset_at) THEN ? ELSE reset_at END,reset_source=CASE WHEN ?<>'' AND (reset_at='' OR ?>reset_at) OR reset_at='' THEN ? ELSE reset_source END,updated_at=? WHERE id=1", reset, reset, reset, reset, reset, source, g.now().UTC().Format(time.RFC3339Nano))
 	return err
 }
 
@@ -408,9 +452,15 @@ func (g *Gate) ConfirmAllowance(ctx context.Context, account, source string, obs
 	if !available || account != p.AccountKey || source == "" || observedAt.IsZero() || observedAt.After(g.now()) || g.now().Sub(observedAt) > 5*time.Minute {
 		return deny(ErrQuota, "fresh non-inference allowance evidence is required")
 	}
-	var updated, reset string
-	if err = g.db.QueryRowContext(ctx, "SELECT updated_at,reset_at FROM authority WHERE id=1").Scan(&updated, &reset); err != nil {
+	var updated, reset, status string
+	if err = g.db.QueryRowContext(ctx, "SELECT updated_at,reset_at,status FROM authority WHERE id=1").Scan(&updated, &reset, &status); err != nil {
 		return err
+	}
+	if status != "UNKNOWN" && status != "AVAILABLE" && status != "EXHAUSTED" && status != "POLICY_VIOLATION" {
+		return deny(ErrPolicy, "unrecognized durable authority state")
+	}
+	if g.policyBlocked.Load() || status == "POLICY_VIOLATION" {
+		return deny(ErrPolicy, "allowance evidence cannot clear an observed model/effort violation")
 	}
 	blockedAt, _ := time.Parse(time.RFC3339Nano, updated)
 	if !observedAt.After(blockedAt) {
@@ -435,12 +485,18 @@ func (g *Gate) Check(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if g.blocked.Load() || p.EmergencyStop || p.Pause {
-		return deny(ErrQuota, "owner dispatch pause or latched provider lockout")
-	}
 	var status string
 	if err = g.db.QueryRowContext(ctx, "SELECT status FROM authority WHERE id=1").Scan(&status); err != nil {
 		return err
+	}
+	if status != "UNKNOWN" && status != "AVAILABLE" && status != "EXHAUSTED" && status != "POLICY_VIOLATION" {
+		return deny(ErrPolicy, "unrecognized durable authority state")
+	}
+	if g.policyBlocked.Load() || status == "POLICY_VIOLATION" {
+		return deny(ErrPolicy, "observed native policy violation requires explicit owner review")
+	}
+	if g.blocked.Load() || p.EmergencyStop || p.Pause {
+		return deny(ErrQuota, "owner dispatch pause or latched provider lockout")
 	}
 	if status == "EXHAUSTED" {
 		return deny(ErrQuota, "global provider/account lockout")
@@ -462,6 +518,7 @@ func (g *Gate) Check(ctx context.Context) error {
 }
 
 type UsageReceipt struct {
+	NativeThreadID        string    `json:"native_thread_id,omitempty"`
 	SourceKey             string    `json:"source_key"`
 	ProviderTurnID        string    `json:"provider_turn_id"`
 	Session               string    `json:"session"`
@@ -547,6 +604,7 @@ type Snapshot struct {
 	BudgetUsed                 int          `json:"budget_used"`
 	ConservativeTurnsRemaining int          `json:"conservative_turns_remaining"`
 	LatchedStop                bool         `json:"latched_stop"`
+	PolicyStop                 bool         `json:"policy_stop"`
 	Active                     int          `json:"active"`
 	Queued                     int          `json:"queued"`
 	Uncertain                  int          `json:"uncertain"`
@@ -569,7 +627,8 @@ func (g *Gate) Snapshot(ctx context.Context) (Snapshot, error) {
 	if err = g.db.QueryRowContext(ctx, `SELECT coalesce(sum(state='active'),0),coalesce(sum(state='queued'),0),coalesce(sum(state='uncertain'),0),coalesce(sum(state='completed'),0) FROM attempts`).Scan(&s.Active, &s.Queued, &s.Uncertain, &s.Completed); err != nil {
 		return s, err
 	}
-	s.LatchedStop = g.blocked.Load() || s.Quota == "EXHAUSTED"
+	s.PolicyStop = g.policyBlocked.Load() || s.Quota == "POLICY_VIOLATION"
+	s.LatchedStop = g.blocked.Load() || g.policyBlocked.Load() || s.Quota == "EXHAUSTED" || s.Quota == "POLICY_VIOLATION"
 	if err = g.db.QueryRowContext(ctx, "SELECT count(*) FROM attempts WHERE epoch=? AND dispatched_at<>''", p.AuthorizationEpoch).Scan(&s.BudgetUsed); err != nil {
 		return s, err
 	}

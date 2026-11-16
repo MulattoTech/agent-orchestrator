@@ -93,7 +93,7 @@ func (c *conversation) guardedRequest(ctx context.Context, id, method string, pa
 		return c.conn.request(ctx, method, params, out)
 	}
 	err := c.conn.requestWithWrite(ctx, method, params, out, func(write func() error) error {
-		return c.guard.Dispatch(ctx, inferenceguard.Request{ID: id, Session: c.guardSession, Project: c.guardProject, Operation: method, Selection: s}, func() error {
+		return c.guard.Dispatch(ctx, inferenceguard.Request{NativeThreadID: c.threadID, ID: id, Session: c.guardSession, Project: c.guardProject, Operation: method, Selection: s}, func() error {
 			c.mu.Lock()
 			c.guardRequest = id
 			c.guardTurn = ""
@@ -244,4 +244,14 @@ func (c *conversation) interruptIfGuardStopped() {
 			_ = c.interruptGuardedTurn(ctx)
 		}()
 	}
+}
+
+func (c *conversation) startGuarded(ctx context.Context, thread, model, effort string) error {
+	if c.guard != nil {
+		if err := c.guard.RegisterNativeThread(ctx, c.guardSession, thread); err != nil {
+			return err
+		}
+	}
+	c.start(thread, model, effort)
+	return nil
 }

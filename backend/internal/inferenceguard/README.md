@@ -41,3 +41,11 @@ The guarded Codex Chat driver can enforce AO-visible requests. Terminal sessions
 An outer native turn can contain many internal model responses, automatic compaction or native subagents. This package does not claim that one outer turn equals one model response, or that the outer-turn cap bounds hidden native responses. Native internal dispatch behavior must be qualified separately before live fleet approval. The isolated candidate must remain emergency-stopped during the exhausted allowance and offline validation.
 
 Tests use temporary SQLite databases, fake clocks, writer spies and synthetic account/catalog observations. They never invoke a real provider.
+
+## Native ownership and observed drift
+
+Verified native threads are registered independently of the mutable session metadata. Every admitted request records its exact native thread, and every returned native turn is bound to that request. ResolveReceiptSession uses the native thread and root-turn pair to recover the unique governed host, including reviews, side hosts, temporary fork preparation and later host transfers. Reusing one native thread from another host cannot admit a second concurrent or uncertain request.
+
+Actual receipt model/effort remains actual evidence even if it differs from the outgoing envelope. ObserveNativeSelection compares it with the admitted selection and latches POLICY_VIOLATION, requests bounded native interrupts, and preserves both values. Quota notifications cannot overwrite this state, and ConfirmAllowance cannot clear it. ReviewPolicyViolation requires a named owner, an evidence reason, emergency stop and no active/uncertain work; it then leaves EXHAUSTED so fresh allowance verification is still required before a separate owner restart.
+
+A post-response drift alarm can stop subsequent governed work; it cannot undo or retroactively prevent the first unexpected native response. The observer must be wired to accepted bound receipts for continuous detection. An unpatched process, a native internal thread not exposed to AO, or a provider that does not emit usable receipts remains outside that proof. Storage failure leaves the current process latched; recovery after irrecoverable loss of the authority storage is not established by these tests.
