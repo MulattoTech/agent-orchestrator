@@ -337,6 +337,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Projects: store,
 	})
 	mgr := sessionmanager.New(sessionmanager.Deps{
+		SessionAdmission:    cfg.SessionAdmission,
 		Runtime:             runtime,
 		Agents:              agents,
 		Workspace:           ws,
@@ -358,6 +359,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		CodexOperationGate:  codexOperationGate,
 	})
 	mgr.SetAgentReadiness(agentReadiness)
+	mgr.StartAdmissionDispatcher(ctx)
 	scmProvider := newMultiSCMProvider(cfg.GitLab, log)
 	// Attach the operator's GitHub login to product telemetry only when its carrier
 	// event can actually be sent, and guard the typed nil from newMultiSCMProvider

@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // EnvComputerUse is set to "1" on a chat session's `ao mcp` server when the
@@ -133,6 +135,7 @@ var DefaultAllowedOrigins = []string{
 // Config is the fully-resolved daemon configuration. It is immutable once
 // built by Load.
 type Config struct {
+	SessionAdmission domain.SessionAdmissionLimits
 	// Host is the bind address. Always loopback — see LoopbackHost.
 	Host string
 	// Port is the TCP port to bind. The daemon fails fast if it is taken.
@@ -274,13 +277,18 @@ func (c Config) Addr() string {
 //
 // The bind host is not configurable: the daemon is loopback-only by design.
 func Load() (Config, error) {
+	admission, err := loadSessionAdmission()
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
-		Host:            LoopbackHost,
-		Port:            DefaultPort,
-		RequestTimeout:  DefaultRequestTimeout,
-		ShutdownTimeout: DefaultShutdownTimeout,
-		Agent:           DefaultAgent,
-		AllowedOrigins:  DefaultAllowedOrigins,
+		SessionAdmission: admission,
+		Host:             LoopbackHost,
+		Port:             DefaultPort,
+		RequestTimeout:   DefaultRequestTimeout,
+		ShutdownTimeout:  DefaultShutdownTimeout,
+		Agent:            DefaultAgent,
+		AllowedOrigins:   DefaultAllowedOrigins,
 		Telemetry: TelemetryConfig{
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
