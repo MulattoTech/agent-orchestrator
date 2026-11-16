@@ -3,7 +3,9 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -73,8 +75,9 @@ func TestOpenWorksWhenTheSearchIndexCannotOpen(t *testing.T) {
 }
 
 // The app's readers never attach search.db, so an index that breaks while the
-// daemon runs fails search alone. Each read below runs concurrently, so the
-// pool has to open new connections after search.db is gone.
+// daemon runs fails search alone. Damage the disposable index schema through
+// SQLite while its production connections stay open. Unlinking an open file
+// is Unix-specific and never reached the intended assertion on Windows.
 func TestAppReadsSurviveASearchIndexThatBreaksAfterOpen(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -89,11 +92,20 @@ func TestAppReadsSurviveASearchIndexThatBreaksAfterOpen(t *testing.T) {
 	if err := st.UpsertProject(ctx, domain.ProjectRecord{ID: "kept", Path: filepath.Join(dir, "repo")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeSearchFiles(dir); err != nil {
+	indexURL := url.URL{Path: searchDatabasePath(dir)}
+	damagedIndex, err := sql.Open("sqlite", "file:"+indexURL.EscapedPath()+"?_pragma=busy_timeout(5000)")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(searchDatabasePath(dir), 0o700); err != nil {
+	if _, err := damagedIndex.ExecContext(ctx, "DROP TABLE session_search_docs"); err != nil {
+		_ = damagedIndex.Close()
 		t.Fatal(err)
+	}
+	if err := damagedIndex.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CountSessionSearchDocs(ctx); err == nil {
+		t.Fatal("fixture did not produce a real search read failure")
 	}
 
 	const readers = maxReaders

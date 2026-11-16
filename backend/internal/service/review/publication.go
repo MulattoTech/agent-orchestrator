@@ -22,7 +22,9 @@ type PublicationResult struct {
 }
 
 type publicationStore interface {
-	RecordReviewPublication(context.Context, string, string, string) (bool, error)
+	ClaimReviewPublication(context.Context, domain.ReviewRun, time.Time) (domain.ReviewPublicationAttempt, bool, error)
+	ReleaseReviewPublicationPrewrite(context.Context, string, string) (bool, error)
+	CompleteReviewPublication(context.Context, domain.ReviewRun, ports.SCMReviewPublicationReceipt, time.Time) (bool, error)
 }
 
 type publicationLock struct {
@@ -61,7 +63,7 @@ func (s *Service) lockPublication(id string) func() {
 
 // Publish reuses a saved result. A failed/missing verdict cannot be guessed,
 // and stale PR heads are rejected by the provider immediately before POST.
-// The stable run marker lets a replay recover a receipt after a daemon crash.
+// A durable claim makes every recovered attempt read-only until a matching\n// remote receipt becomes visible. Missing history never authorizes a new POST.
 func (s *Service) Publish(ctx context.Context, workerID domain.SessionID, runID string) (PublicationResult, error) {
 	if workerID == "" || strings.TrimSpace(runID) == "" {
 		return PublicationResult{}, fmt.Errorf("%w: worker and run are required", ErrInvalid)
@@ -115,7 +117,34 @@ func (s *Service) publishSaved(ctx context.Context, run domain.ReviewRun, existi
 	if err != nil {
 		return ports.SCMReviewPublicationReceipt{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	receipt, err := s.publisher.PublishReview(ctx, ports.SCMReviewPublication{PR: ref, RunID: run.ID, TargetSHA: run.TargetSHA, Verdict: run.Verdict, Body: run.Body, ExistingReviewID: existingID})
+	store, ok := s.store.(publicationStore)
+	if !ok {
+		return ports.SCMReviewPublicationReceipt{}, fmt.Errorf("review publication store is unavailable")
+	}
+	attempt, claimed, err := store.ClaimReviewPublication(ctx, run, s.clock())
+	if err != nil {
+		if errors.Is(err, domain.ErrReviewPublicationConflict) {
+			return ports.SCMReviewPublicationReceipt{}, fmt.Errorf("%w: %w", ErrConflict, err)
+		}
+		return ports.SCMReviewPublicationReceipt{}, err
+	}
+	receipt, err := s.publisher.PublishReview(ctx, ports.SCMReviewPublication{
+		PR: ref, RunID: run.ID, TargetSHA: run.TargetSHA, Verdict: run.Verdict, Body: run.Body,
+		ExistingReviewID: existingID, AllowCreate: claimed && existingID == "",
+	})
+	if err != nil && claimed && existingID == "" && ports.ReviewPublicationDidNotWrite(err) {
+		// A cancelled caller may still carry a definite pre-write proof.
+		// Finish only this safe local transition under a bounded context.
+		releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		_, releaseErr := store.ReleaseReviewPublicationPrewrite(releaseCtx, run.ID, attempt.ClaimID)
+		releaseCancel()
+		if releaseErr != nil {
+			return ports.SCMReviewPublicationReceipt{}, errors.Join(err, fmt.Errorf("retain uncertain publication claim: %w", releaseErr))
+		}
+	}
+	if errors.Is(err, ports.ErrSCMReviewPublicationUncertain) {
+		return ports.SCMReviewPublicationReceipt{}, fmt.Errorf("%w: %w; saved verdict remains intact", ErrConflict, err)
+	}
 	if errors.Is(err, ports.ErrSCMHeadChanged) {
 		return ports.SCMReviewPublicationReceipt{}, fmt.Errorf("%w: reviewed commit is no longer the PR head; saved verdict remains intact", ErrConflict)
 	}
@@ -129,12 +158,12 @@ func (s *Service) publishSaved(ctx context.Context, run domain.ReviewRun, existi
 		return ports.SCMReviewPublicationReceipt{}, err
 	}
 	if receipt.ReviewID == "" || receipt.TargetSHA != run.TargetSHA {
-		return ports.SCMReviewPublicationReceipt{}, fmt.Errorf("%w: invalid publication receipt", ErrInvalid)
+		return ports.SCMReviewPublicationReceipt{}, fmt.Errorf("%w: %w: invalid publication receipt", ErrConflict, ports.ErrSCMReviewPublicationUncertain)
 	}
 	switch receipt.State {
 	case "COMMENTED", "APPROVED", "CHANGES_REQUESTED":
 	default:
-		return ports.SCMReviewPublicationReceipt{}, fmt.Errorf("%w: unsubmitted publication receipt", ErrInvalid)
+		return ports.SCMReviewPublicationReceipt{}, fmt.Errorf("%w: %w: unsubmitted publication receipt", ErrConflict, ports.ErrSCMReviewPublicationUncertain)
 	}
 	return receipt, nil
 }
@@ -144,9 +173,10 @@ func (s *Service) recordPublication(ctx context.Context, run *domain.ReviewRun, 
 	if !ok {
 		return fmt.Errorf("review publication store is unavailable")
 	}
-	updated, err := store.RecordReviewPublication(ctx, run.ID, run.TargetSHA, receipt.ReviewID)
+	updated, err := store.CompleteReviewPublication(ctx, *run, receipt, s.clock())
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w: local receipt was not committed; durable publication claim is retained: %w",
+			ErrConflict, ports.ErrSCMReviewPublicationUncertain, err)
 	}
 	if !updated {
 		return fmt.Errorf("%w: publication receipt conflicts with the saved result", ErrConflict)

@@ -29,7 +29,7 @@ type publicationHTTPFake struct {
 }
 
 func publicationRequest() ports.SCMReviewPublication {
-	return ports.SCMReviewPublication{PR: ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "o", Name: "r"}, Number: 1}, RunID: "run-1", TargetSHA: publicationSHA, Verdict: domain.VerdictApproved, Body: "Saved verdict with apostrophe: it's intact."}
+	return ports.SCMReviewPublication{PR: ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "o", Name: "r"}, Number: 1}, RunID: "run-1", TargetSHA: publicationSHA, Verdict: domain.VerdictApproved, Body: "Saved verdict with apostrophe: it's intact.", AllowCreate: true}
 }
 func publicationProvider(t *testing.T, f *publicationHTTPFake) *Provider {
 	t.Helper()
@@ -104,6 +104,7 @@ func TestSavedReviewPublicationReconcilesLostResponseWithoutDuplicate(t *testing
 	if _, err := provider.PublishReview(context.Background(), request); err == nil {
 		t.Fatal("expected lost response")
 	}
+	request.AllowCreate = false
 	receipt, err := provider.PublishReview(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +129,7 @@ func TestSavedReviewPublicationRejectsHeadMovementBeforePost(t *testing.T) {
 	}
 }
 func TestSavedReviewPublicationDoesNotTrustForeignOrWrongCommitReceipt(t *testing.T) {
-	for _, kind := range []string{"foreign marker", "wrong commit", "missing known receipt", "pending receipt"} {
+	for _, kind := range []string{"foreign marker", "wrong commit", "missing known receipt", "pending receipt", "wrong body"} {
 		t.Run(kind, func(t *testing.T) {
 			fake := &publicationHTTPFake{reviews: []publishedReview{}}
 			request := publicationRequest()
@@ -141,6 +142,9 @@ func TestSavedReviewPublicationDoesNotTrustForeignOrWrongCommitReceipt(t *testin
 				review.CommitID = strings.Repeat("3", 40)
 				request.ExistingReviewID = "991"
 			case "missing known receipt":
+				request.ExistingReviewID = "991"
+			case "wrong body":
+				review.Body = "different body"
 				request.ExistingReviewID = "991"
 			case "pending receipt":
 				review.State = "PENDING"
@@ -155,6 +159,75 @@ func TestSavedReviewPublicationDoesNotTrustForeignOrWrongCommitReceipt(t *testin
 			}
 			if fake.posts != 0 {
 				t.Fatal("receipt verification created a review")
+			}
+		})
+	}
+}
+
+func TestSavedReviewPublicationDefaultIsReadOnly(t *testing.T) {
+	fake := &publicationHTTPFake{reviews: []publishedReview{}}
+	provider := publicationProvider(t, fake)
+	request := publicationRequest()
+	request.AllowCreate = false
+	if _, err := provider.PublishReview(context.Background(), request); !errors.Is(err, ports.ErrSCMReviewPublicationUncertain) {
+		t.Fatalf("error=%v", err)
+	}
+	if fake.posts != 0 || fake.headReads != 0 {
+		t.Fatalf("posts=%d head reads=%d", fake.posts, fake.headReads)
+	}
+}
+
+func TestSavedReviewPublicationReconcilesHistoricalReceiptAfterHeadMoves(t *testing.T) {
+	for _, known := range []bool{false, true} {
+		t.Run(map[bool]string{false: "marker", true: "known receipt"}[known], func(t *testing.T) {
+			fake := &publicationHTTPFake{reviews: []publishedReview{}}
+			provider := publicationProvider(t, fake)
+			request := publicationRequest()
+			receipt, err := provider.PublishReview(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake.head = strings.Repeat("9", 40)
+			reads := fake.headReads
+			request.AllowCreate = false
+			if known {
+				request.ExistingReviewID = receipt.ReviewID
+			}
+			recovered, err := provider.PublishReview(context.Background(), request)
+			if err != nil || recovered.TargetSHA != publicationSHA || !recovered.Reused {
+				t.Fatalf("receipt=%+v error=%v", recovered, err)
+			}
+			if fake.posts != 1 || fake.headReads != reads {
+				t.Fatal("historical receipt consulted current head or posted again")
+			}
+		})
+	}
+}
+
+func TestRESTMutationDoesNotReplayRedirects(t *testing.T) {
+	for _, code := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			posts, redirected := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					t.Errorf("unexpected method %s", r.Method)
+				}
+				if r.URL.Path == "/reviews" {
+					posts++
+					w.Header().Set("Location", "/duplicate")
+					w.WriteHeader(code)
+					return
+				}
+				redirected++
+				w.WriteHeader(http.StatusCreated)
+			}))
+			defer server.Close()
+			client := NewClient(ClientOptions{HTTPClient: server.Client(), RESTBase: server.URL})
+			if _, err := client.doREST(context.Background(), http.MethodPost, "/reviews", nil, map[string]string{"body": "offline fixture"}); err == nil {
+				t.Fatal("redirect accepted as mutation success")
+			}
+			if posts != 1 || redirected != 0 {
+				t.Fatalf("initial=%d redirected=%d", posts, redirected)
 			}
 		})
 	}
