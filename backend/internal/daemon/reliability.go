@@ -80,6 +80,7 @@ func startReliability(ctx context.Context, cfg config.Config, store *sqlite.Stor
 		admission.SetWorkerResourceCeiling(0)
 	}
 	go func() {
+		defer o.receipts.Close()
 		o.observe(ctx)
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
