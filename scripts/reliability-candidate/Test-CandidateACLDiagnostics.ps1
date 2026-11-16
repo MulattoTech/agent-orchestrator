@@ -15,13 +15,13 @@ function Get-Acl {
 }
 
 function Test-SyntheticACL {
-    param([string]$Label, [string]$Sddl, [string]$Expected, [switch]$Private)
+    param([string]$Label, [string]$Sddl, [string]$Expected, [switch]$Private, [switch]$CurrentOwner)
     $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($Sddl)
     $script:descriptorBytes = [byte[]]::new($descriptor.BinaryLength)
     $descriptor.GetBinaryForm($script:descriptorBytes, 0)
     $observed = 'PASS'
     try {
-        $null = Assert-CandidateACL -Path 'C:\SyntheticACLFixture' -Private:$Private
+        $null = Assert-CandidateACL -Path 'C:\SyntheticACLFixture' -Private:$Private -CurrentOwner:$CurrentOwner
     } catch {
         if ($_.Exception.Message -match '^(AO_ACL_[A-Z_]+):') {
             $observed = $Matches[1]
@@ -41,3 +41,8 @@ Test-SyntheticACL 'outsider read on ancestor' 'O:SYG:SYD:P(A;;FR;;;WD)(A;;FA;;;S
 Test-SyntheticACL 'outsider mutation on ancestor' 'O:SYG:SYD:P(A;;FA;;;WD)(A;;FA;;;SY)' 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW'
 Test-SyntheticACL 'outsider read on private root' 'O:SYG:SYD:P(A;;FR;;;WD)(A;;FA;;;SY)' 'AO_ACL_UNTRUSTED_PRIVATE_ALLOW' -Private
 Test-SyntheticACL 'untrusted owner' 'O:WDG:SYD:P(A;;FA;;;SY)' 'AO_ACL_OWNER_OR_DACL_UNVERIFIED'
+Test-SyntheticACL 'inherit-only outsider allow ignored' 'O:SYG:SYD:P(A;IO;FA;;;WD)(A;;FA;;;SY)' 'PASS'
+Test-SyntheticACL 'inherited outsider allow on ancestor blocked' 'O:SYG:SYD:(A;ID;FA;;;WD)(A;;FA;;;SY)' 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW'
+Test-SyntheticACL 'system owner fails current-owner gate' 'O:SYG:SYD:P(A;;FA;;;SY)' 'AO_ACL_OWNER_OR_DACL_UNVERIFIED' -CurrentOwner
+$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+Test-SyntheticACL 'current owner passes current-owner gate' "O:${currentSid}G:SYD:P(A;;FA;;;SY)" 'PASS' -CurrentOwner
