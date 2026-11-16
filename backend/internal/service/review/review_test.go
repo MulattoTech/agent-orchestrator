@@ -308,7 +308,7 @@ func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 
 	for _, verdict := range []domain.ReviewVerdict{domain.VerdictChangesRequested, domain.VerdictApproved} {
 		st.run.Status, st.run.Verdict, st.run.Body = domain.ReviewRunRunning, domain.VerdictNone, ""
-		run, err := svc.Submit(context.Background(), "mer-1", "run-1", verdict, "body", "987")
+		run, err := svc.Submit(context.Background(), "mer-1", "run-1", verdict, "body", "")
 		if err != nil {
 			t.Fatalf("%s: Submit: %v", verdict, err)
 		}
@@ -434,7 +434,7 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	}
 	svc := New(nil, st)
 
-	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987")
+	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +444,7 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 
 	enabled := true
 	st.sessionAutoInjectReview = &enabled
-	run, err = svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987")
+	run, err = svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +463,7 @@ func TestSubmitEmitsIdempotentReviewResultNotification(t *testing.T) {
 	svc := New(nil, st, WithNotificationSink(sink))
 
 	for range 2 {
-		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "looks good", "987"); err != nil {
+		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "looks good", ""); err != nil {
 			t.Fatalf("Submit: %v", err)
 		}
 	}
@@ -602,7 +602,7 @@ func TestSubmitReportsReviewOutcome(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), middleware.RequestIDKey, "req-1")
 	if _, err := svc.Submit(ctx, "worker-1", "run-1",
-		domain.VerdictChangesRequested, "please rename this", "gh-review-42"); err != nil {
+		domain.VerdictChangesRequested, "please rename this", ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
@@ -620,8 +620,8 @@ func TestSubmitReportsReviewOutcome(t *testing.T) {
 	if p["duration_ms"] != int64(90_000) {
 		t.Fatalf("duration_ms = %#v, want 90000", p["duration_ms"])
 	}
-	if p["posted_to_provider"] != true {
-		t.Fatalf("posted_to_provider = %#v, want true", p["posted_to_provider"])
+	if p["posted_to_provider"] != false {
+		t.Fatalf("durable local submission posted_to_provider = %#v, want false before verification", p["posted_to_provider"])
 	}
 	if got[0].SessionID == nil || *got[0].SessionID != "worker-1" {
 		t.Fatalf("SessionID = %#v, want worker-1", got[0].SessionID)
@@ -1109,13 +1109,13 @@ func (r *recordingReviewRefresher) RequestReviewRefresh(prURL string) {
 
 func TestSubmitRequestsReviewRefreshForProviderPostedReview(t *testing.T) {
 	const prURL = "https://github.com/acme/app/pull/42"
-	st := &fakeStore{
+	st := &publicationFakeStore{fakeStore: &fakeStore{
 		ok:  true,
 		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: prURL, Status: domain.ReviewRunRunning},
 		prs: []domain.PullRequest{{URL: prURL, Number: 42}},
-	}
+	}}
 	refresher := &recordingReviewRefresher{}
-	svc := New(nil, st, WithThreadRefresher(refresher))
+	svc := New(nil, st, WithThreadRefresher(refresher), WithReviewPublisher(&fakeSavedReviewPublisher{}))
 
 	for range 2 {
 		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "looks good", "987"); err != nil {
