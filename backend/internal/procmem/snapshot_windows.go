@@ -80,6 +80,7 @@ func Snapshot(ctx context.Context, run Runner) (*Table, error) {
 			}
 			var creation, exit, kernel, user windows.Filetime
 			if windows.GetProcessTimes(h, &creation, &exit, &kernel, &user) == nil {
+				p.CreationTime = filetimeTicks(creation)
 				p.CPUSeconds = filetimeSeconds(kernel) + filetimeSeconds(user)
 			}
 			_ = windows.CloseHandle(h)

@@ -27,6 +27,9 @@ type Process struct {
 	PID      int
 	PPID     int
 	RSSBytes uint64
+	// CreationTime is the Windows FILETIME creation timestamp in 100-nanosecond
+	// ticks since 1601. Zero means unavailable, including ps-based snapshots.
+	CreationTime uint64
 	// CPUSeconds is the process's total user+system CPU time so far. Two
 	// snapshots apart give a rate; one alone says nothing about now.
 	CPUSeconds float64
@@ -111,7 +114,8 @@ func (t *Table) All() []Process {
 
 // Tree sums the root and every descendant. A root that no longer exists
 // yields an empty tree. Each pid is counted once even if several roots share
-// descendants.
+// descendants. A known parent created after its child cannot be its parent;
+// unknown or equal creation timestamps retain the PPID relationship.
 func (t *Table) Tree(roots ...int) Tree {
 	var tree Tree
 	seen := map[int]bool{}
@@ -129,6 +133,10 @@ func (t *Table) Tree(roots ...int) Tree {
 		tree.CPUSeconds += p.CPUSeconds
 		tree.Processes = append(tree.Processes, p)
 		for _, child := range t.children[pid] {
+			childProcess := t.byPID[child]
+			if p.CreationTime != 0 && childProcess.CreationTime != 0 && p.CreationTime > childProcess.CreationTime {
+				continue
+			}
 			walk(child)
 		}
 	}
@@ -166,7 +174,10 @@ func parseCPUTime(s string) (float64, bool) {
 
 // CPUPercent is the share of one core a set of processes used between two
 // snapshots: the growth in their CPU time over the wall-clock gap. Processes
-// absent from prev started inside the gap, so their whole CPU time counts.
+// absent from prev, or with a different known creation time, count their whole
+// CPU time. A known identity with a regressing counter or a change between
+// known and unknown identity contributes no delta for this interval. When both
+// identities are unknown, the existing PID/counter comparison is retained.
 // Without a previous snapshot there is no rate, only a lifetime total, so the
 // answer is zero rather than a misleading spike.
 func CPUPercent(procs []Process, prev *Table, elapsed float64) float64 {
@@ -176,8 +187,16 @@ func CPUPercent(procs []Process, prev *Table, elapsed float64) float64 {
 	var delta float64
 	for _, p := range procs {
 		before := 0.0
-		if q, ok := prev.byPID[p.PID]; ok && q.CPUSeconds <= p.CPUSeconds {
-			before = q.CPUSeconds
+		if q, ok := prev.byPID[p.PID]; ok {
+			if p.CreationTime != q.CreationTime {
+				if p.CreationTime == 0 || q.CreationTime == 0 {
+					continue
+				}
+			} else if q.CPUSeconds <= p.CPUSeconds {
+				before = q.CPUSeconds
+			} else if p.CreationTime != 0 {
+				continue
+			}
 		}
 		delta += p.CPUSeconds - before
 	}
