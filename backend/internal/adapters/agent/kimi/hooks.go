@@ -256,6 +256,9 @@ func seedKimiCredential(sourcePath, targetPath string) error {
 	}
 	// A newer login replaces the copy, which went stale once Kimi renewed it.
 	if target, err := os.Stat(targetPath); err == nil {
+		if !target.Mode().IsRegular() {
+			return fmt.Errorf("target Kimi credentials %s is not a regular file", targetPath)
+		}
 		if source, err := os.Stat(sourcePath); err != nil || !source.ModTime().After(target.ModTime()) {
 			return nil //nolint:nilerr // No newer login to copy; the existing one stays.
 		}
