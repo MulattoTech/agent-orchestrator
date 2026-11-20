@@ -36,6 +36,17 @@ func (e *SessionQueuedError) Error() string {
 }
 func (e *SessionQueuedError) Unwrap() error { return ErrSessionQueued }
 
+// SessionAdmissionStateError preserves a durable command that cannot be replayed.
+// A completed command without a session receipt is also uncertain, not a new spawn.
+type SessionAdmissionStateError struct {
+	RequestID string
+	State     string
+}
+
+func (e *SessionAdmissionStateError) Error() string {
+	return "SESSION_ADMISSION_NOT_RUNNABLE: durable request " + e.RequestID + " is " + e.State
+}
+
 type admissionReservation struct {
 	project   domain.ProjectID
 	kind      domain.SessionKind
@@ -53,6 +64,7 @@ type sessionAdmission struct {
 	limits          domain.SessionAdmissionLimits
 	resourceCeiling int
 	reservations    map[*admissionReservation]struct{}
+	spawnRequests   map[string]string
 	owner           string
 	dispatchMu      sync.Mutex
 	dispatchStarted bool
@@ -222,10 +234,94 @@ func (m *Manager) reserveWorkspaceOwner(ctx context.Context, id domain.SessionID
 type sessionAdmissionStore interface {
 	EnqueueSessionAdmission(context.Context, domain.SessionAdmissionRequest) error
 	ListSessionAdmission(context.Context) ([]domain.SessionAdmissionRequest, error)
+	GetSessionAdmission(context.Context, string) (domain.SessionAdmissionRequest, bool, error)
 	ClaimSessionAdmission(context.Context, string, time.Time) (domain.SessionAdmissionRequest, bool, error)
 	CompleteSessionAdmission(context.Context, domain.SessionAdmissionRequest) (bool, error)
 	RecoverSessionAdmission(context.Context, string, time.Time) error
 	CancelSessionAdmission(context.Context, string, time.Time) (bool, error)
+}
+
+func spawnAdmissionRequestID(project domain.ProjectID, key string) string {
+	sum := sha256.Sum256([]byte("spawn:" + string(project) + ":" + key))
+	return "admit-" + hex.EncodeToString(sum[:16])
+}
+
+func spawnAdmissionPayload(cfg ports.SpawnConfig) ([]byte, error) {
+	// Speculative worktrees expire. A deferred command provisions its own tree
+	// synchronously. Only these delivery details are excluded from identity.
+	cfg.TaskPreparation = ""
+	cfg.Async = false
+	return json.Marshal(cfg)
+}
+
+// beginSpawnRequest prevents a concurrent external retry from creating a
+// cancellable queue command while the first call owns a pre-seed reservation.
+// The dispatcher already owns a durable claim and must not contend on this gate.
+func (m *Manager) beginSpawnRequest(ctx context.Context, cfg ports.SpawnConfig) (func(), error) {
+	if cfg.ClientRequestID == "" || ctx.Value(admissionQueueContextKey{}) != nil {
+		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.admission.mu.Lock()
+	if previous, active := m.admission.spawnRequests[cfg.ClientRequestID]; active {
+		m.admission.mu.Unlock()
+		if previous != cfg.ClientRequestHash {
+			return nil, ErrClientRequestConflict
+		}
+		return nil, ErrClientRequestIncomplete
+	}
+	if m.admission.spawnRequests == nil {
+		m.admission.spawnRequests = make(map[string]string)
+	}
+	m.admission.spawnRequests[cfg.ClientRequestID] = cfg.ClientRequestHash
+	m.admission.mu.Unlock()
+	return func() {
+		m.admission.mu.Lock()
+		delete(m.admission.spawnRequests, cfg.ClientRequestID)
+		m.admission.mu.Unlock()
+	}, nil
+}
+
+// existingSpawnAdmission keeps a stable request with its durable command even
+// when capacity changes. Only its claimed dispatcher may execute that payload.
+func (m *Manager) existingSpawnAdmission(ctx context.Context, cfg ports.SpawnConfig) error {
+	if cfg.ClientRequestID == "" || ctx.Value(admissionQueueContextKey{}) != nil {
+		return nil
+	}
+	store, ok := m.store.(sessionAdmissionStore)
+	if !ok {
+		return nil
+	}
+	request, found, err := store.GetSessionAdmission(ctx, spawnAdmissionRequestID(cfg.ProjectID, cfg.ClientRequestID))
+	if err != nil || !found {
+		return err
+	}
+	if request.ProjectID != cfg.ProjectID || request.Operation != "spawn" {
+		return ErrClientRequestConflict
+	}
+	var original ports.SpawnConfig
+	if err := json.Unmarshal([]byte(request.Payload), &original); err != nil {
+		return fmt.Errorf("read admission request payload: %w", err)
+	}
+	storedPayload, err := spawnAdmissionPayload(original)
+	if err != nil {
+		return err
+	}
+	payload, err := spawnAdmissionPayload(cfg)
+	if err != nil {
+		return err
+	}
+	if string(storedPayload) != string(payload) {
+		return ErrClientRequestConflict
+	}
+	switch request.State {
+	case "queued", "running":
+		return &SessionQueuedError{RequestID: request.ID}
+	default:
+		return &SessionAdmissionStateError{RequestID: request.ID, State: request.State}
+	}
 }
 
 func (m *Manager) queueSpawnAdmission(ctx context.Context, cfg ports.SpawnConfig, cause error) error {
@@ -258,26 +354,22 @@ func (m *Manager) queueSpawnAdmission(ctx context.Context, cfg ports.SpawnConfig
 	if id == "" {
 		id = uuid.NewString()
 	}
-	sum := sha256.Sum256([]byte("spawn:" + string(cfg.ProjectID) + ":" + id))
-	id = "admit-" + hex.EncodeToString(sum[:16])
+	id = spawnAdmissionRequestID(cfg.ProjectID, id)
 	for _, dependency := range cfg.AdmissionDependencies {
 		if dependency == id {
 			return errors.New("ADMISSION_DEPENDENCY_CYCLE")
 		}
 	}
-	// Speculative worktrees expire. A deferred command provisions its own tree.
-	cfg.TaskPreparation = ""
-	cfg.Async = false
 	if cfg.ClientRequestID == "" {
 		cfg.ClientRequestID = id
-		bytes, err := json.Marshal(cfg)
+		bytes, err := spawnAdmissionPayload(cfg)
 		if err != nil {
 			return err
 		}
 		hash := sha256.Sum256(bytes)
 		cfg.ClientRequestHash = hex.EncodeToString(hash[:])
 	}
-	bytes, err := json.Marshal(cfg)
+	bytes, err := spawnAdmissionPayload(cfg)
 	if err != nil {
 		return err
 	}
