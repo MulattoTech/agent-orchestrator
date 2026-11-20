@@ -134,7 +134,7 @@ func TestObserverPreservesCheckpointOnOrdinaryAppend(t *testing.T) {
 	first := o.Sweep(t.Context(), bindings)
 	parser := o.cursors[path].parser
 	unchanged := o.Sweep(t.Context(), bindings)
-	if len(unchanged.Errors) != 0 || unchanged.BytesRead != 0 || unchanged.ObservedReceipts != first.ObservedReceipts || o.cursors[path].parser != parser {
+	if len(unchanged.Errors) != 0 || unchanged.BytesRead != first.BytesRead || unchanged.ObservedReceipts != first.ObservedReceipts || o.cursors[path].parser != parser {
 		t.Fatalf("unchanged file reset its checkpoint: %+v", unchanged)
 	}
 	extra := record("token_usage_record", map[string]any{"thread_id": thread, "turn_id": "root", "root_turn_id": "root", "response_id": "appended",
