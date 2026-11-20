@@ -2,9 +2,9 @@
   "schema": "ao-offline-windows-selection-v1",
   "go_version": "1.27.4",
   "expected_total": {
-    "top": 9,
-    "nested": 32,
-    "leaf": 36
+    "top": 40,
+    "nested": 60,
+    "leaf": 91
   },
   "runs": [
     {
@@ -91,6 +91,95 @@
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/wrong_helper",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/wrong_parent",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/zero_root"
+      ]
+    },
+    {
+      "name": "process-metrics",
+      "packages": [
+        "./internal/procmem"
+      ],
+      "package_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem"
+      ],
+      "regex": "^(TestAvailablePressureIsUsedShare|TestCPUPercentIsRateBetweenSnapshots|TestCPUPercentUsesProcessCreationIdentity|TestParseCPUTicksExcludesGuestTime|TestParseCPUTicksSkipsIdleAndIOWait|TestParseDropsZombies|TestParseDropsZombiesWithLongCommands|TestParseHandlesRowsPastTheDefaultScannerLimit|TestParseKeepsFullCommandLineAndCapsIt|TestParseLoadavgDividesByItsOwnScale|TestParsePSISome10|TestParseReadsOptionalCPUTime|TestParseRejectsMalformedRow|TestParseSwapUsageReadsTotalAndUsedFromXswUsage|TestParseVMStatComputesAvailableAsTotalLessMemoryUsed|TestParseVMStatDistinguishesSwapFromOrdinaryPaging|TestParseVMStatRejectsOutputWithNoPageSize|TestTreeCountsSharedDescendantsOnce|TestTreeMissingRootIsEmpty|TestTreeSumsDescendantsOnly|TestTreeUsesKnownProcessCreationOrder)$",
+      "expected_top": 21,
+      "expected_nested": 24,
+      "expected_leaf": 43,
+      "test_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestAvailablePressureIsUsedShare",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentIsRateBetweenSnapshots",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/both_identities_unavailable_counter_reset",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/both_identities_unavailable_growth",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/current_identity_unavailable",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/first_snapshot",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/known_identity_counter_rollback",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/negative_elapsed",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/new_pid_known_identity",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/new_pid_unavailable_identity",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/previous_identity_unavailable",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/reused_pid_equal_total",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/reused_pid_higher_total",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/reused_pid_lower_total",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/same_identity_growth",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/same_identity_unchanged",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/unavailable_identity_keeps_valid_peer",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestCPUPercentUsesProcessCreationIdentity/zero_elapsed",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseCPUTicksExcludesGuestTime",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseCPUTicksSkipsIdleAndIOWait",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseDropsZombies",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseDropsZombiesWithLongCommands",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseHandlesRowsPastTheDefaultScannerLimit",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseKeepsFullCommandLineAndCapsIt",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseLoadavgDividesByItsOwnScale",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParsePSISome10",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseReadsOptionalCPUTime",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseRejectsMalformedRow",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseSwapUsageReadsTotalAndUsedFromXswUsage",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseVMStatComputesAvailableAsTotalLessMemoryUsed",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseVMStatDistinguishesSwapFromOrdinaryPaging",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestParseVMStatRejectsOutputWithNoPageSize",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeCountsSharedDescendantsOnce",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeMissingRootIsEmpty",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeSumsDescendantsOnly",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeUsesKnownProcessCreationOrder",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeUsesKnownProcessCreationOrder/all_timestamps_unavailable",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeUsesKnownProcessCreationOrder/child_timestamp_unavailable",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeUsesKnownProcessCreationOrder/equal_timestamps",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeUsesKnownProcessCreationOrder/intermediate_parent_newer_than_child",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeUsesKnownProcessCreationOrder/ordered_ancestry",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeUsesKnownProcessCreationOrder/parent_newer_than_child",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeUsesKnownProcessCreationOrder/parent_timestamp_unavailable",
+        "github.com/aoagents/agent-orchestrator/backend/internal/procmem::TestTreeUsesKnownProcessCreationOrder/rejected_child_remains_an_independent_root"
+      ]
+    },
+    {
+      "name": "receipt-recovery",
+      "packages": [
+        "./internal/nativereceipts"
+      ],
+      "package_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts"
+      ],
+      "regex": "^(TestConflictingThreadOwnershipCannotBeReintroducedByThirdBinding|TestNativeResponseCountersIgnoreCumulativeAndBindExactContext|TestObserverChargesMalformedAndOversizedReadsWithoutAdvancingCheckpoint|TestObserverChargesPartialRecordsToSweepBudgetAndDoesNotStarveFinalFile|TestObserverFortyThreadsPartialAppendRestartAndForeignFile|TestObserverPreservesCheckpointOnOrdinaryAppend|TestObserverRejectsMismatchedNativeIdentityAndCancellation|TestObserverReplaysObservableFileRewrite|TestReceiptBeforeAcknowledgementRetriesWithoutReplayingFile|TestUnknownUsageDoesNotBecomeZero)$",
+      "expected_top": 10,
+      "expected_nested": 4,
+      "expected_leaf": 12,
+      "test_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestConflictingThreadOwnershipCannotBeReintroducedByThirdBinding",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestNativeResponseCountersIgnoreCumulativeAndBindExactContext",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverChargesMalformedAndOversizedReadsWithoutAdvancingCheckpoint",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverChargesMalformedAndOversizedReadsWithoutAdvancingCheckpoint/malformed",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverChargesMalformedAndOversizedReadsWithoutAdvancingCheckpoint/oversized",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverChargesPartialRecordsToSweepBudgetAndDoesNotStarveFinalFile",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverFortyThreadsPartialAppendRestartAndForeignFile",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverPreservesCheckpointOnOrdinaryAppend",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverRejectsMismatchedNativeIdentityAndCancellation",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverReplaysObservableFileRewrite",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverReplaysObservableFileRewrite/same_size_replacement_after_append",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverReplaysObservableFileRewrite/shrink_above_offset_rebuilds_model_context",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestReceiptBeforeAcknowledgementRetriesWithoutReplayingFile",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestUnknownUsageDoesNotBecomeZero"
       ]
     }
   ]
