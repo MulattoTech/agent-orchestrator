@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 	"github.com/google/uuid"
 )
 
@@ -386,6 +387,9 @@ func (m *Manager) queueSpawnAdmission(ctx context.Context, cfg ports.SpawnConfig
 	now := m.clock()
 	rec := domain.SessionAdmissionRequest{ID: id, ProjectID: cfg.ProjectID, Operation: "spawn", Payload: string(bytes), CreatedAt: now, UpdatedAt: now, AvailableAt: now}
 	if err := store.EnqueueSessionAdmission(ctx, rec); err != nil {
+		if errors.Is(err, sqlitestore.ErrAdmissionClientKeyConflict) {
+			return ErrClientRequestConflict
+		}
 		return fmt.Errorf("capacity request was NOT queued: %w", err)
 	}
 	return &SessionQueuedError{RequestID: id}
