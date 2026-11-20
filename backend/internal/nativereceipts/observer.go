@@ -325,10 +325,16 @@ func (o *Observer) read(ctx context.Context, path string, b Binding, budget int6
 		return 0, false, errors.New("native_file_not_regular")
 	}
 	c := o.cursors[path]
-	if c == nil || !os.SameFile(c.info, info) || info.Size() < c.offset || c.binding != b {
+	// Rebuild cached context before pending retries for observable rewrites.
+	// Regrowth beyond the last observed size, or size+mtime-preserving rewrites,
+	// remains undetected; these metadata checks do not verify the full prefix.
+	if c == nil || !os.SameFile(c.info, info) || info.Size() < c.offset || c.binding != b ||
+		info.Size() < c.info.Size() || (info.Size() == c.info.Size() && !info.ModTime().Equal(c.info.ModTime())) {
 		c = &cursor{binding: b, info: info, parser: NewParser(b)}
 		o.cursors[path] = c
 	}
+	// Compare the next sweep with this observation, not cursor creation time.
+	c.info = info
 	accepted, retryErr := c.parser.RetryPending(ctx, o.sink)
 	s.ObservedReceipts += int64(accepted)
 	if retryErr != nil {
