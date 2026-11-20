@@ -92,6 +92,25 @@ func (s *Store) GetSessionAdmission(ctx context.Context, id string) (domain.Sess
 	return rec, err == nil, err
 }
 
+// HasSessionAdmissionClientKeyConflict preserves the global client-key scope
+// while legacy admission IDs remain project-specific. The partial expression
+// index also covers historical rows without rewriting their payloads or IDs.
+// This read is not a claim: the exclusive daemon's in-flight key gate owns
+// concurrent external submissions.
+func (s *Store) HasSessionAdmissionClientKeyConflict(ctx context.Context, key string, project domain.ProjectID) (bool, error) {
+	if key == "" {
+		return false, nil
+	}
+	var found int
+	err := s.readDB.QueryRowContext(ctx, `SELECT 1 FROM session_admission_queue
+		WHERE operation='spawn' AND json_valid(payload)
+		AND json_extract(payload,'$.ClientRequestID')=? AND project_id<>? LIMIT 1`, key, project).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (s *Store) ListSessionAdmission(ctx context.Context) ([]domain.SessionAdmissionRequest, error) {
 	rows, err := s.readDB.QueryContext(ctx, "SELECT "+admissionColumns+" FROM session_admission_queue ORDER BY created_at,id")
 	if err != nil {

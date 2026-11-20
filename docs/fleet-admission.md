@@ -43,10 +43,19 @@ remains authoritative.
 
 Capacity refusal returns SESSION_CAPACITY_QUEUED and admissionRequestId when
 queueing is enabled. Commands use immutable payloads and stable client request
-keys. Duplicate keys do not create duplicate queue commands. Commands without a
-caller key receive a stable key before eventual execution.
+keys. Duplicate keys do not create duplicate queue commands. Client keys are
+global across projects, matching the session receipt contract. Reusing a key
+under another project conflicts before a session receipt exists, including after
+cancellation, daemon restart or queue disablement.
 
-A retry with the same client key and project remains attached to that immutable
+Commands without a caller key receive an internal stable key for eventual
+execution and lost-acknowledgement recovery. The returned admissionRequestId is
+a tracking, cancellation and dependency handle; it is not a caller retry key.
+Another submission that omits clientRequestId is a separate request. Callers
+that need idempotent resubmission must supply the same clientRequestId from the
+first submission.
+
+A retry with the same client key and project remains attached to its immutable
 command even if worker capacity grows or queue dispatch is disabled. Pending and
 running commands retain their queue identity; cancelled or blocked commands are
 not revived. A completed command requires its committed session receipt before it
@@ -63,10 +72,16 @@ available committed receipt or report that the request remains in flight.
 Unrelated keys remain concurrent, and a claimed dispatcher can complete during
 the enqueue response window. A new client key represents explicit fresh intent.
 
-This guard preserves the existing admission ID format, which includes the project
-ID. Legacy reuse of one client key across different projects before a session
-receipt exists remains a separate identity gap; this change adds no queue-history
-scan or schema migration.
+Existing project-specific admission IDs and payloads remain unchanged. An
+additive nonunique index finds cross-project key conflicts in historical commands
+without scanning queue history on each submission. Existing duplicate or malformed
+rows are retained for reconciliation; malformed payloads still fail the ordinary
+exact-command validation when that command is retried.
+
+These submission guarantees assume one exclusive daemon Manager owns the database.
+Its global in-flight key gate serializes same-key external requests; the durable
+conflict check is a read, not an atomic claim between independent Managers.
+Claimed queue dispatch keeps its existing owner/generation and receipt guards.
 
 The queue admits at most 1,024 pending/running commands. Transactional SQLite
 claims rotate projects by latest durable claim time and preserve FIFO within a
