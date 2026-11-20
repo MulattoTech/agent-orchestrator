@@ -363,6 +363,11 @@ fixture inputs, pre-launch
 gates, owned stop checks, and conservative policy structure. It never executes
 the start/stop scripts, AO, a provider, or an account endpoint.
 
+The `Candidate scripts` workflow is configured to run this static and synthetic
+suite on GitHub-hosted Windows for changes to this directory or its workflow,
+including draft and stacked pull requests and matching pushes to `main`. It uses
+read-only repository permissions and leaves compiled-candidate qualification separate.
+
 Only static execution checks of these start/stop scripts are authorized in the
 exhausted-allowance phase. The final candidate's compiled offline companions are
 run separately after the final source commit. Fresh private-directory creation

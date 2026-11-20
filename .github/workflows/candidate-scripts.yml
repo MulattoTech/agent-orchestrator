@@ -1,0 +1,34 @@
+name: Candidate scripts
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    paths:
+      - 'scripts/reliability-candidate/**'
+      - '.github/workflows/candidate-scripts.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/reliability-candidate/**'
+      - '.github/workflows/candidate-scripts.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-scripts-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  candidate-scripts:
+    # This synthetic suite also covers drafts and stacked PRs.
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify candidate scripts and synthetic ACL decisions
+        shell: pwsh
+        run: ./scripts/reliability-candidate/Test-CandidateScripts.ps1
