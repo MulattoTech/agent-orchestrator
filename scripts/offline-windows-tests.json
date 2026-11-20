@@ -1,0 +1,97 @@
+{
+  "schema": "ao-offline-windows-selection-v1",
+  "go_version": "1.27.4",
+  "expected_total": {
+    "top": 9,
+    "nested": 32,
+    "leaf": 36
+  },
+  "runs": [
+    {
+      "name": "kimi-copy-recovery",
+      "packages": [
+        "./internal/adapters/agent/kimi"
+      ],
+      "package_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
+      ],
+      "regex": "^(TestKimiCopyFallbackRejectsNonFileCredentialTarget|TestKimiMixedCopyRetriesAfterPartialFailure)$",
+      "expected_top": 2,
+      "expected_nested": 5,
+      "expected_leaf": 5,
+      "test_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi::TestKimiCopyFallbackRejectsNonFileCredentialTarget",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi::TestKimiCopyFallbackRejectsNonFileCredentialTarget/newer_directory",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi::TestKimiCopyFallbackRejectsNonFileCredentialTarget/older_directory",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi::TestKimiCopyFallbackRejectsNonFileCredentialTarget/same-time_directory",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi::TestKimiMixedCopyRetriesAfterPartialFailure",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi::TestKimiMixedCopyRetriesAfterPartialFailure/blocked_later_target",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi::TestKimiMixedCopyRetriesAfterPartialFailure/malformed_later_reference"
+      ]
+    },
+    {
+      "name": "inference-reconnect",
+      "packages": [
+        "./internal/adapters/chatdriver/codexappserver"
+      ],
+      "package_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
+      ],
+      "regex": "^(TestInferenceGuardChildCompletionCannotReleaseRootLease|TestInferenceGuardCompletionBeforeAcknowledgementSettlesOnlyExactTurn|TestInferenceGuardInternalRPCErrorKeepsUncertainLease|TestInferenceGuardReconnectAtCapacityRecoversKnownTurn|TestInferenceGuardReconnectCapacityExceptionStaysBounded|TestInferenceGuardStaleRootStartCannotBindPendingRequest)$",
+      "expected_top": 6,
+      "expected_nested": 18,
+      "expected_leaf": 22,
+      "test_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardChildCompletionCannotReleaseRootLease",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardCompletionBeforeAcknowledgementSettlesOnlyExactTurn",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardInternalRPCErrorKeepsUncertainLease",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectAtCapacityRecoversKnownTurn",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectAtCapacityRecoversKnownTurn/active",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectAtCapacityRecoversKnownTurn/restart_uncertain",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/budget_exhausted",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/different_registered_host",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/different_registered_thread",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/foreign_native_account",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/host_ownership_inconclusive",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/missing_host",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/new_start",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/non_live_transport",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/ordinary_resume",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/owner_emergency_stop",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/owner_soft_pause",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/policy_selection_changed",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/quota_lockout",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/unbound_uncertain_request",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/uninitialized_host",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardReconnectCapacityExceptionStaysBounded/unsupported_native_catalog",
+        "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver::TestInferenceGuardStaleRootStartCannotBindPendingRequest"
+      ]
+    },
+    {
+      "name": "native-worker-snapshot-selection",
+      "packages": [
+        "./internal/session_manager"
+      ],
+      "package_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
+      ],
+      "regex": "^(TestAdmissionNativeWorkerSnapshotSelection)$",
+      "expected_top": 1,
+      "expected_nested": 9,
+      "expected_leaf": 9,
+      "test_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/duplicate_root",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/exact_owned_roots_and_metrics",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/extra_ppid_row_cannot_replace_missing_root",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/extra_ppid_row_is_diagnostic_only",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/helper_name_case",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/negative_root",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/wrong_helper",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/wrong_parent",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionNativeWorkerSnapshotSelection/zero_root"
+      ]
+    }
+  ]
+}
