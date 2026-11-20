@@ -66,7 +66,10 @@ The recipe:
 6. Compiles a separate daemon test executable with a fixed parent/owned-child
    selector, complete explicit fake external effects, strict policy and the
    exact source commit linked into the executable.
-7. Verifies that all five executables are unsigned and writes a **new**
+7. Reads the actual initialized policy, source/version/date, fixture-mode and
+   worker-hash strings from the compiled PE/COFF images. The ten required values
+   must match the independently supplied build inputs before a manifest is issued.
+8. Verifies that all five executables are unsigned and writes a **new**
    C:\AO-MTechLabs-Releases-20261116\ao-unofficial-UTC-commit12 directory,
    per-file hashes, and a manifest/digest. It leaves failed artifacts intact for
    inspection and never overwrites an earlier release.
@@ -74,6 +77,19 @@ The recipe:
 The build script executes no resulting binary, daemon, provider, or test.
 The three go test -c invocations compile the offline companions. Build manifests report
 validation as not run; successful compilation does not qualify live behavior.
+
+`Candidate.Binary.ps1` uses .NET PE header parsing and bounded COFF symbol and
+section reads. It follows each primary Go string descriptor to initialized,
+file-backed bytes; a `.str` backing symbol or recorded linker command is not
+proof of the global's value. It supports this recipe's unstripped PE32+/AMD64
+images and refuses missing, duplicate, malformed or mismatched required values.
+Name scans and total decoding work are bounded. It needs no Go inspection tool
+and never loads or starts a compiled image, including with `-trimpath` builds.
+
+The manifest records the decoded proof. Each held-stream hash and byte length
+must equal its final file entry, and the fleet's embedded helper hash must still
+match the packaged worker. This establishes compiled identity only; the existing
+runner/ACL/launch gates and separate runtime qualification remain in force.
 
 Hashes detect accidental changes relative to the locally issued manifest; they
 are not a third-party signature. Preserve the final manifest hash in the repair
@@ -358,6 +374,10 @@ do not bypass them with a broad kill.
 ## Static verification and remaining qualification
 
 Test-CandidateScripts.ps1 parses PowerShell ASTs and reads the JSON template.
+It runs the in-memory PE string-identity cases, including changed/default values,
+missing or duplicate primary symbols, auxiliary records, malformed bounds and
+virtual-only or overlapping sections. It also checks that actual binary identity
+verification precedes manifest publication.
 It checks compile-only build commands, fixed fleet/ConPTY/daemon arguments and hash-derived
 fixture inputs, pre-launch
 gates, owned stop checks, and conservative policy structure. It never executes

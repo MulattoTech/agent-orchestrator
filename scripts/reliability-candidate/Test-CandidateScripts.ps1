@@ -27,7 +27,7 @@ if (-not $commonText.Contains('function Initialize-CandidateReleaseRoot') -or
     $commonText.Contains('C:\AODev\releases')) {
     throw 'Candidate release root must be protected, verified and independent of AODev.'
 }
-foreach ($testScript in @('Test-CandidateACLDiagnostics.ps1', 'Test-CandidateBundleACL.ps1')) {
+foreach ($testScript in @('Test-CandidateACLDiagnostics.ps1', 'Test-CandidateBundleACL.ps1', 'Test-CandidateBinaryIdentity.ps1')) {
     if (-not $sources['Build-Candidate.ps1'].Contains("'$testScript'")) {
         throw "Release build must package the synthetic ACL behavioral test: $testScript"
     }
@@ -66,6 +66,33 @@ if ($compileCalls.Count -ne 3 -or
     @($compileCalls | Where-Object { $_.Extent.Text -match './internal/adapters/runtime/conpty' }).Count -ne 1 -or
     @($compileCalls | Where-Object { $_.Extent.Text -match './internal/daemon' }).Count -ne 1) {
     throw 'Build must compile exactly the fleet, ConPTY and daemon fixtures.'
+}
+$identityCalls = @($build.FindAll({
+    param($n)
+    $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Assert-CandidateBuildIdentity'
+}, $true))
+$manifestWrites = @($build.FindAll({
+    param($n)
+    $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Write-CandidateJSONNew'
+}, $true))
+if ($identityCalls.Count -ne 1 -or $manifestWrites.Count -ne 1 -or
+    $identityCalls[0].Extent.StartOffset -le ($compileCalls | ForEach-Object { $_.Extent.EndOffset } | Measure-Object -Maximum).Maximum -or
+    $identityCalls[0].Extent.EndOffset -ge $manifestWrites[0].Extent.StartOffset) {
+    throw 'Compiled identity must be verified after all companions compile and before the manifest is issued.'
+}
+foreach ($required in @('Candidate.Binary.ps1', 'Test-CandidateBinaryIdentity.ps1',
+    '-SourceCommit $sourceCommit', '-HelperSHA256 $helperHash', '-Version $version', '-BuiltAtUtc $date',
+    '$proof.sha256 -cne $files[$proof.file].sha256', '$proof.bytes -ne $files[$proof.file].bytes',
+    '$files[''ao-offline-worker.exe''].sha256 -cne $helperHash', 'binaryIdentity = $binaryIdentity')) {
+    if (-not $sources['Build-Candidate.ps1'].Contains($required)) { throw "Missing compiled identity binding: $required" }
+}
+$binaryCommands = @($asts['Candidate.Binary.ps1'].FindAll({
+    param($n)
+    $n -is [Management.Automation.Language.CommandAst]
+}, $true))
+if (@($binaryCommands | Where-Object { $_.GetCommandName() -in @('Start-Process', 'Invoke-RestMethod', 'Invoke-WebRequest', 'Add-Type') -or
+    $_.InvocationOperator -eq [Management.Automation.Language.TokenKind]::Ampersand }).Count -ne 0) {
+    throw 'Binary verification must inspect data without process, network or dynamic code invocation.'
 }
 $buildCommands = @($build.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() })
 if (@($buildCommands | Where-Object { $_ -in @('Start-Process', 'Invoke-RestMethod', 'Invoke-WebRequest') }).Count -ne 0) {
@@ -251,5 +278,6 @@ foreach ($role in @('orchestrator', 'implementation', 'complex', 'reviewer', 'li
 }
 & (Join-Path $PSScriptRoot 'Test-CandidateACLDiagnostics.ps1')
 & (Join-Path $PSScriptRoot 'Test-CandidateBundleACL.ps1')
-Write-Output "PASS: parsed $($asts.Count) PowerShell scripts and verified synthetic ACL and bundle decisions; build is compile-only, fleet/ConPTY/daemon arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
-Write-Output 'Scope: AST/static and in-memory synthetic descriptor/bundle validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'
+& (Join-Path $PSScriptRoot 'Test-CandidateBinaryIdentity.ps1')
+Write-Output "PASS: parsed $($asts.Count) PowerShell scripts and verified synthetic ACL, bundle and compiled-string decisions; build is compile-only, fleet/ConPTY/daemon arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
+Write-Output 'Scope: AST/static and in-memory synthetic descriptor/bundle/PE validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'

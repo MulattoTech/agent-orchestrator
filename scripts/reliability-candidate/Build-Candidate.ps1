@@ -9,6 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'This candidate recipe requires Windows.' }
 . (Join-Path $PSScriptRoot 'Candidate.Common.ps1')
+. (Join-Path $PSScriptRoot 'Candidate.Binary.ps1')
 $repo = Get-CandidateLocalPath $RepositoryRoot
 $goTool = Get-CandidateLocalPath $GoExecutable
 if (-not (Test-Path -LiteralPath $goTool -PathType Leaf)) { throw 'The approved local Go toolchain is missing.' }
@@ -68,15 +69,17 @@ try {
     $daemonFlags = "-X $module/daemon.OfflineDaemonFixture=1 -X $module/daemon.OfflineDaemonFixtureSource=$sourceCommit -X $module/inferenceguard.RequirePolicy=1"
     & $goTool test -p 1 -c -trimpath -ldflags $daemonFlags -o (Join-Path $releaseDir 'ao-offline-daemon.exe') ./internal/daemon 2>&1 | Tee-Object -FilePath $buildLog -Append
     if ($LASTEXITCODE -ne 0) { throw 'Offline complete daemon fixture compilation failed.' }
+    # Inspect actual initialized values without executing any compiled image.
+    $binaryIdentity = Assert-CandidateBuildIdentity -Root $releaseDir -SourceCommit $sourceCommit -HelperSHA256 $helperHash -Version $version -BuiltAtUtc $date
     $mainTest = Get-Content -LiteralPath (Join-Path $repo 'backend\internal\session_manager\main_test.go') -Raw
     $match = [regex]::Match($mainTest, '(?m)^const admissionOfflineTestAllowlist = "([^"]+)"')
     if (-not $match.Success -or $mainTest -notmatch 'admissionOfflineCompanion == "1"') {
         throw 'Compiled offline allowlist source could not be identified.'
     }
     [IO.File]::WriteAllText((Join-Path $releaseDir 'offline-test-allowlist.txt'), $match.Groups[1].Value + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-    foreach ($name in @('Candidate.Common.ps1', 'Build-Candidate.ps1', 'Run-Offline-Fleet.ps1', 'Run-Offline-ConPTY.ps1', 'Run-Offline-Daemon.ps1',
+    foreach ($name in @('Candidate.Common.ps1', 'Candidate.Binary.ps1', 'Build-Candidate.ps1', 'Run-Offline-Fleet.ps1', 'Run-Offline-ConPTY.ps1', 'Run-Offline-Daemon.ps1',
         'Start-PostRefresh-Validation.ps1', 'Stop-Candidate.ps1', 'Test-CandidateScripts.ps1',
-        'Test-CandidateACLDiagnostics.ps1', 'Test-CandidateBundleACL.ps1', 'policy.template.json', 'README.md')) {
+        'Test-CandidateACLDiagnostics.ps1', 'Test-CandidateBundleACL.ps1', 'Test-CandidateBinaryIdentity.ps1', 'policy.template.json', 'README.md')) {
         Copy-Item -LiteralPath (Join-Path $packageSource $name) -Destination (Join-Path $releaseDir $name) -ErrorAction Stop
     }
     Set-Location $repo
@@ -89,6 +92,15 @@ try {
     foreach ($file in Get-ChildItem -LiteralPath $releaseDir -File | Sort-Object Name) {
         $files[$file.Name] = @{ sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = $file.Length }
     }
+    # A changed image must not acquire a new manifest after its values were verified.
+    foreach ($proof in $binaryIdentity.files) {
+        if ($proof.sha256 -cne $files[$proof.file].sha256 -or $proof.bytes -ne $files[$proof.file].bytes) {
+            throw "Compiled image changed after initialized-value verification: $($proof.file)"
+        }
+    }
+    if ($files['ao-offline-worker.exe'].sha256 -cne $helperHash) {
+        throw 'Packaged worker changed after its hash was linked into the fleet companion.'
+    }
     foreach ($name in @('AO.exe', 'ao-offline-worker.exe', 'ao-offline-fleet.exe', 'ao-offline-conpty.exe', 'ao-offline-daemon.exe')) {
         $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $releaseDir $name)
         if ($signature.Status -ne 'NotSigned') { throw "Unexpected signing state for unofficial candidate: $name" }
@@ -97,6 +109,7 @@ try {
         schemaVersion = 1; candidate = $candidateName; sourceCommit = $sourceCommit; sourceClean = $true; unsigned = $true
         builtAtUtc = $date; version = $version; toolchain = $goVersion; target = 'windows/amd64'; strictPolicy = $true
         strictLinkerFlags = $strictFlags
+        binaryIdentity = $binaryIdentity
         offlineCompanion = @{
             allowlistEnforced = $true; allowlist = $match.Groups[1].Value; helperSHA256 = $helperHash
             maxNativeChildren = 40; childMemoryBudgetBytes = 805306368
