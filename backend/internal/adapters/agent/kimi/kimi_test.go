@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -481,6 +483,7 @@ func TestGetAgentHooksSeedsAOManagedConfigFromOAuthUserKimiHome(t *testing.T) {
 }
 
 func TestGetAgentHooksSeedsCredentialReferencedByOAuthConfig(t *testing.T) {
+	canShare := kimiDirectorySymlinksSupported(t)
 	for _, tc := range []struct {
 		name               string
 		writeDefaultSource bool
@@ -544,8 +547,8 @@ func TestGetAgentHooksSeedsCredentialReferencedByOAuthConfig(t *testing.T) {
 			if string(gotCredentials) != string(scopedCredentials) {
 				t.Fatalf("AO scoped credentials = %s, want %s", gotCredentials, scopedCredentials)
 			}
-			if tc.writeDefaultSource {
-				// A user signed in to Kimi shares their whole store with AO's Kimi.
+			if tc.writeDefaultSource && canShare {
+				// A user signed in to Kimi shares their whole store when links are available.
 				assertKimiCredentialsShared(t, userHome, aoHome)
 			} else if _, err := os.Stat(filepath.Join(aoHome, "credentials", "kimi-code.json")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("unreferenced default AO credential stat err = %v, want not exist", err)
@@ -555,6 +558,7 @@ func TestGetAgentHooksSeedsCredentialReferencedByOAuthConfig(t *testing.T) {
 }
 
 func TestGetAgentHooksReseedsHookOnlyAOManagedConfigFromOAuthUserKimiHome(t *testing.T) {
+	canShare := kimiDirectorySymlinksSupported(t)
 	workspace := t.TempDir()
 	userHome := t.TempDir()
 	aoHome := t.TempDir()
@@ -572,6 +576,9 @@ func TestGetAgentHooksReseedsHookOnlyAOManagedConfigFromOAuthUserKimiHome(t *tes
 	if err := os.WriteFile(credentialsPath, aoCredentials, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	older := time.Unix(1_700_000_000, 0)
+	setKimiCredentialModTime(t, credentialsPath, older)
+	setKimiCredentialModTime(t, filepath.Join(userHome, "credentials", "kimi-code.json"), older.Add(time.Hour))
 
 	if err := (&Plugin{}).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
 		WorkspacePath: workspace,
@@ -582,7 +589,9 @@ func TestGetAgentHooksReseedsHookOnlyAOManagedConfigFromOAuthUserKimiHome(t *tes
 
 	// AO's stale copy gives way to the user's own login.
 	assertKimiOAuthProfileSeeded(t, userHome, aoHome, userCredentials, userCredentials)
-	assertKimiCredentialsShared(t, userHome, aoHome)
+	if canShare {
+		assertKimiCredentialsShared(t, userHome, aoHome)
+	}
 }
 
 func writeKimiOAuthProfile(t *testing.T, home string, credentials []byte) {
@@ -681,7 +690,8 @@ func TestGetAgentHooksSeedsAOManagedCredentialsFromUserKimiHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
+	// Windows reports writable files as 0666; these bits do not describe its DACL.
+	if got, want := info.Mode().Perm(), os.FileMode(0o600); runtime.GOOS != "windows" && got != want {
 		t.Fatalf("AO credentials permissions = %o, want %o", got, want)
 	}
 }
@@ -689,13 +699,16 @@ func TestGetAgentHooksSeedsAOManagedCredentialsFromUserKimiHome(t *testing.T) {
 // Kimi renews its 15-minute tokens with a rotating refresh token, so a copy
 // seeded once went stale and could not sign in. AO's Kimi shares the user's.
 func TestGetAgentHooksSharesTheUsersKimiLoginInPlaceOfAStaleCopy(t *testing.T) {
+	canShare := kimiDirectorySymlinksSupported(t)
 	workspace := t.TempDir()
 	userHome := t.TempDir()
 	aoHome := t.TempDir()
 	t.Setenv(kimiCodeHomeEnv, userHome)
+	sourcePath := filepath.Join(userHome, "credentials", "kimi-code.json")
+	targetPath := filepath.Join(aoHome, "credentials", "kimi-code.json")
 	for path, data := range map[string][]byte{
-		filepath.Join(userHome, "credentials", "kimi-code.json"): []byte(`{"access_token":"user-token"}`),
-		filepath.Join(aoHome, "credentials", "kimi-code.json"):   []byte(`{"access_token":"ao-token"}`),
+		sourcePath: []byte(`{"access_token":"user-token"}`),
+		targetPath: []byte(`{"access_token":"ao-token"}`),
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
@@ -704,6 +717,9 @@ func TestGetAgentHooksSharesTheUsersKimiLoginInPlaceOfAStaleCopy(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	older := time.Unix(1_700_000_000, 0)
+	setKimiCredentialModTime(t, targetPath, older)
+	setKimiCredentialModTime(t, sourcePath, older.Add(time.Hour))
 
 	if err := (&Plugin{}).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
 		WorkspacePath: workspace,
@@ -712,7 +728,6 @@ func TestGetAgentHooksSharesTheUsersKimiLoginInPlaceOfAStaleCopy(t *testing.T) {
 		t.Fatalf("GetAgentHooks err = %v", err)
 	}
 
-	targetPath := filepath.Join(aoHome, "credentials", "kimi-code.json")
 	got, err := os.ReadFile(targetPath)
 	if err != nil {
 		t.Fatalf("read AO credentials: %v", err)
@@ -720,13 +735,19 @@ func TestGetAgentHooksSharesTheUsersKimiLoginInPlaceOfAStaleCopy(t *testing.T) {
 	if want := `{"access_token":"user-token"}`; string(got) != want {
 		t.Fatalf("AO credentials = %s, want %s", got, want)
 	}
-	assertKimiCredentialsShared(t, userHome, aoHome)
-	// A token Kimi renews in AO's home is the user's too.
+	if canShare {
+		assertKimiCredentialsShared(t, userHome, aoHome)
+	}
+	// A shared store follows renewals; a fallback copy leaves the source alone.
 	if err := os.WriteFile(targetPath, []byte(`{"access_token":"renewed"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if mine, _ := os.ReadFile(filepath.Join(userHome, "credentials", "kimi-code.json")); string(mine) != `{"access_token":"renewed"}` {
-		t.Fatalf("user credentials = %s, want the renewed token", mine)
+	wantSource := `{"access_token":"user-token"}`
+	if canShare {
+		wantSource = `{"access_token":"renewed"}`
+	}
+	if mine, err := os.ReadFile(sourcePath); err != nil || string(mine) != wantSource {
+		t.Fatalf("user credentials = %s, %v; want %s", mine, err, wantSource)
 	}
 }
 
@@ -742,10 +763,9 @@ func TestSeedKimiCredentialReplacesAnOlderCopy(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	older := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(target, older, older); err != nil {
-		t.Fatal(err)
-	}
+	older := time.Unix(1_700_000_000, 0)
+	setKimiCredentialModTime(t, target, older)
+	setKimiCredentialModTime(t, source, older.Add(time.Hour))
 	if err := seedKimiCredential(source, target); err != nil {
 		t.Fatal(err)
 	}
@@ -756,15 +776,41 @@ func TestSeedKimiCredentialReplacesAnOlderCopy(t *testing.T) {
 	if err := os.WriteFile(target, []byte(`{"access_token":"renewed"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(source, older, older); err != nil {
-		t.Fatal(err)
-	}
+	setKimiCredentialModTime(t, source, older)
+	setKimiCredentialModTime(t, target, older.Add(time.Hour))
 	if err := seedKimiCredential(source, target); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(target); string(got) != `{"access_token":"renewed"}` {
 		t.Fatalf("copy = %s, want the renewed one kept", got)
 	}
+}
+
+func setKimiCredentialModTime(t *testing.T, path string, when time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func kimiDirectorySymlinksSupported(t *testing.T) bool {
+	t.Helper()
+	source := t.TempDir()
+	target := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(source, target); err != nil {
+		var errno syscall.Errno
+		if errors.As(err, &errno) {
+			t.Logf("directory symlink probe: %v (errno=%d)", err, uint64(errno))
+		}
+		// These Win32 errors identify unsupported links or a missing privilege.
+		const errorNotSupported syscall.Errno = 50
+		const errorPrivilegeNotHeld syscall.Errno = 1314
+		if runtime.GOOS == "windows" && (errno == errorNotSupported || errno == errorPrivilegeNotHeld) {
+			return false
+		}
+		t.Fatalf("unexpected directory symlink probe failure: %v", err)
+	}
+	return true
 }
 
 func assertKimiCredentialsShared(t *testing.T, userHome, aoHome string) {
@@ -1127,6 +1173,9 @@ func TestPrepareACPInstructionsWritesWhereKimiCodeReads(t *testing.T) {
 }
 
 func TestPrepareACPInstructionsDoesNotWriteThroughALinkedFolder(t *testing.T) {
+	if !kimiDirectorySymlinksSupported(t) {
+		t.Skip("directory symlinks unavailable on this host; see probe error")
+	}
 	workspace, elsewhere := t.TempDir(), t.TempDir()
 	if err := os.Symlink(elsewhere, filepath.Join(workspace, ".kimi-code")); err != nil {
 		t.Fatal(err)
