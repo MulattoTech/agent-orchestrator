@@ -223,7 +223,16 @@ func TestAdmissionNativeWindowsFortyProcessesRecover(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		tree := table.Tree(pids...)
+		ppidTree := table.Tree(pids...)
+		tree, additional, selectionErr := selectNativeWorkerMetrics(table, pids, os.Getpid(), filepath.Base(native.executable))
+		t.Logf("NATIVE_FAKE_SNAPSHOT expected_roots=%d verified_roots=%d verified_root_rss_bytes=%d verified_root_cpu_seconds=%.4f ppid_tree_processes=%d ppid_tree_rss_bytes=%d ppid_tree_cpu_seconds=%.4f selection_error=%v pids=%v",
+			stage, len(tree.Processes), tree.RSSBytes, tree.CPUSeconds, len(ppidTree.Processes), ppidTree.RSSBytes, ppidTree.CPUSeconds, selectionErr, pids)
+		for _, extra := range additional {
+			t.Logf("NATIVE_FAKE_SNAPSHOT_EXTRA pid=%d ppid=%d helper_name=%q rss_bytes=%d cpu_seconds=%.4f outside_owned_roots=true", extra.PID, extra.PPID, extra.Command, extra.RSSBytes, extra.CPUSeconds)
+		}
+		if selectionErr != nil {
+			t.Fatalf("Windows native owned-root snapshot: %v", selectionErr)
+		}
 		if len(tree.Processes) != stage {
 			t.Fatalf("Windows native process snapshot=%d want=%d", len(tree.Processes), stage)
 		}
