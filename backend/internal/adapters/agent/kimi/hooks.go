@@ -218,7 +218,10 @@ func shareKimiCredentialStore(sourceHome, targetHome string, ops kimiCredentialS
 		}
 	}
 	if status, ok, err := kimiCredentialsAuthStatus(filepath.Join(source, "kimi-code.json")); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
-		return false, nil //nolint:nilerr // No usable login to share; the seeded copy stays.
+		// Scoped OAuth logins may have no legacy fixed-name credential.
+		if authorized, err := kimiSourceOAuthAuthorized(sourceHome); err != nil || !authorized {
+			return false, nil //nolint:nilerr // No usable login to share; the seeded copy stays.
+		}
 	}
 	if alreadyShared {
 		return true, nil
