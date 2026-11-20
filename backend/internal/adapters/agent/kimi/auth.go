@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -144,6 +145,15 @@ type kimiAuthConfig struct {
 	Providers map[string]kimiCredentialSource `json:"providers" toml:"providers"`
 }
 
+func sortedKimiProviderNames(providers map[string]kimiCredentialSource) []string {
+	names := make([]string, 0, len(providers))
+	for name := range providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func kimiConfigOAuthCredentialPaths(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -167,7 +177,8 @@ func kimiConfigOAuthCredentialPaths(path string) ([]string, error) {
 
 	paths := make([]string, 0, len(config.Providers))
 	seen := make(map[string]struct{}, len(config.Providers))
-	for _, provider := range config.Providers {
+	for _, name := range sortedKimiProviderNames(config.Providers) {
+		provider := config.Providers[name]
 		if provider.OAuth == nil {
 			continue
 		}
@@ -212,7 +223,11 @@ func kimiConfigAuth(path string) (ports.AgentAuthStatus, domain.AgentAccountIden
 	if decodeErr != nil {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, decodeErr
 	}
-	for _, provider := range config.Providers {
+	// A usable configured credential wins over a malformed sibling. Keep the
+	// first error only when this config has no usable credential.
+	var firstErr error
+	for _, name := range sortedKimiProviderNames(config.Providers) {
+		provider := config.Providers[name]
 		if strings.TrimSpace(provider.APIKey) != "" || kimiProviderEnvHasCredential(provider.Env) {
 			return ports.AgentAuthStatusAuthorized, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey), true, nil
 		}
@@ -221,11 +236,17 @@ func kimiConfigAuth(path string) (ports.AgentAuthStatus, domain.AgentAccountIden
 		}
 		credentialPath := kimiOAuthCredentialPath(filepath.Dir(path), provider.OAuth.Key)
 		status, found, err := kimiCredentialsAuthStatus(credentialPath)
-		if err != nil || found {
-			return status, authprobe.FileSource(credentialPath).WithMethod(domain.AgentAccountMethodAccount), found, err
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if found {
+			return status, authprobe.FileSource(credentialPath).WithMethod(domain.AgentAccountMethodAccount), true, nil
 		}
 	}
-	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, nil
+	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, firstErr
 }
 
 func kimiProviderEnvHasCredential(env map[string]string) bool {
