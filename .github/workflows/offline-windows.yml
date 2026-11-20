@@ -30,7 +30,6 @@ jobs:
     timeout-minutes: 20
     env:
       EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      TEST_TELEMETRY_DIR: ${{ runner.temp }}/offline-windows-setup-telemetry
       GOTOOLCHAIN: local
       GOENV: 'off'
       GOWORK: 'off'
@@ -49,8 +48,10 @@ jobs:
       - name: Disable Go telemetry before toolchain setup
         shell: pwsh
         run: |
+          $env:TEST_TELEMETRY_DIR = Join-Path $env:RUNNER_TEMP 'offline-windows-setup-telemetry'
           New-Item -ItemType Directory -Path $env:TEST_TELEMETRY_DIR -Force | Out-Null
           [IO.File]::WriteAllText((Join-Path $env:TEST_TELEMETRY_DIR 'mode'), 'off')
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TEST_TELEMETRY_DIR=$env:TEST_TELEMETRY_DIR" -Encoding utf8
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
