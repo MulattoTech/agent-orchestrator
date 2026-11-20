@@ -31,8 +31,13 @@ function Assert-CandidateBundle {
         [IO.Path]::GetFileName($rootPath) -notmatch '^ao-unofficial-\d{8}T\d{6}Z-[0-9a-f]{12}$') {
         throw 'Candidate must be a timestamped commit directory under C:\AO-MTechLabs-Releases-20261116.'
     }
-    $manifestPath = Join-Path $rootPath 'manifest.json'
-    $expected = (Get-Content -LiteralPath (Join-Path $rootPath 'manifest.sha256') -Raw).Trim()
+    # Gate bundle validation and every runner's executable dispatch.
+    Assert-CandidateACLAncestors $rootPath
+    $manifestPath = Get-CandidateLocalPath (Join-Path $rootPath 'manifest.json')
+    $digestPath = Get-CandidateLocalPath (Join-Path $rootPath 'manifest.sha256')
+    $null = Assert-CandidateACL $manifestPath -File
+    $null = Assert-CandidateACL $digestPath -File
+    $expected = (Get-Content -LiteralPath $digestPath -Raw).Trim()
     if ($expected -notmatch '^[0-9a-f]{64}$' -or
         (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) {
         throw 'Candidate manifest digest mismatch.'
@@ -52,6 +57,7 @@ function Assert-CandidateBundle {
     foreach ($name in $manifest.files.Keys) {
         if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw 'Manifest contains a nonlocal filename.' }
         $file = Get-CandidateLocalPath (Join-Path $rootPath $name)
+        $null = Assert-CandidateACL $file -File
         $record = $manifest.files[$name]
         if ($record.sha256 -notmatch '^[0-9a-f]{64}$' -or -not (Test-Path -LiteralPath $file -PathType Leaf) -or
             (Get-Item -LiteralPath $file).Length -ne $record.bytes -or
@@ -103,7 +109,7 @@ function Assert-CandidateOwnerPolicy {
 }
 
 function Assert-CandidateACL {
-    param([Parameter(Mandatory)][string]$Path, [switch]$Private, [switch]$CurrentOwner)
+    param([Parameter(Mandatory)][string]$Path, [switch]$Private, [switch]$CurrentOwner, [switch]$File)
     $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $trusted = @($currentSid, 'S-1-5-18', 'S-1-5-32-544',
         'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
@@ -117,6 +123,10 @@ function Assert-CandidateACL {
     # DELETE_CHILD, WRITE_DAC, WRITE_OWNER. Specific create-file/subdirectory
     # rights on a drive ancestor are not treated as delete/replace authority.
     $ancestorMutation = [long]0x500D0040
+    # File write/append and write-EA/attributes can change a verified payload
+    # without replacing its directory entry. Keep directory create-only rights
+    # permitted: the same 0x2/0x4 bits mean add-file/add-subdirectory there.
+    $mutationMask = if ($File) { $ancestorMutation -bor 0x116L } else { $ancestorMutation }
     foreach ($ace in $raw.DiscretionaryAcl) {
         if (($ace.AceFlags -band [Security.AccessControl.AceFlags]::InheritOnly) -ne 0) { continue }
         $kind = [int]$ace.AceType
@@ -126,8 +136,10 @@ function Assert-CandidateACL {
         }
         $sid = $ace.SecurityIdentifier.Value
         $mask = ([long]$ace.AccessMask) -band 0xFFFFFFFFL
-        if ($sid -notin $trusted -and (($Private -and $mask -ne 0) -or (($mask -band $ancestorMutation) -ne 0))) {
-            $reason = if ($Private) { 'AO_ACL_UNTRUSTED_PRIVATE_ALLOW' } else { 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW' }
+        if ($sid -notin $trusted -and (($Private -and $mask -ne 0) -or (($mask -band $mutationMask) -ne 0))) {
+            $reason = if ($Private) { 'AO_ACL_UNTRUSTED_PRIVATE_ALLOW' }
+                elseif ($File) { 'AO_ACL_UNTRUSTED_FILE_MUTATION_ALLOW' }
+                else { 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW' }
             throw "${reason}: $Path (no permission changes made)"
         }
     }
