@@ -1,0 +1,72 @@
+name: Offline Windows regressions
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    paths:
+      - 'backend/**'
+      - 'scripts/test-offline-windows.ps1'
+      - 'scripts/offline-windows-tests.json'
+      - '.github/workflows/offline-windows.yml'
+  push:
+    branches: [main, mtechlabs/integration-rehearsal-20261119]
+    paths:
+      - 'backend/**'
+      - 'scripts/test-offline-windows.ps1'
+      - 'scripts/offline-windows-tests.json'
+      - '.github/workflows/offline-windows.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offline-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  synthetic-regressions:
+    # Independent of ci-lanes: drafts and stacked PRs run this finite selection.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TEST_TELEMETRY_DIR: ${{ runner.temp }}/offline-windows-setup-telemetry
+      GOTOOLCHAIN: local
+      GOENV: 'off'
+      GOWORK: 'off'
+      POWERSHELL_TELEMETRY_OPTOUT: '1'
+      POWERSHELL_UPDATECHECK: 'Off'
+      PSModuleAnalysisCachePath: 'NUL'
+      DOTNET_MultiCoreJitNoProfileGather: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Disable Go telemetry before toolchain setup
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path $env:TEST_TELEMETRY_DIR -Force | Out-Null
+          [IO.File]::WriteAllText((Join-Path $env:TEST_TELEMETRY_DIR 'mode'), 'off')
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.27.4'
+          check-latest: false
+          cache: false
+
+      - name: Run isolated source regressions at the exact head
+        shell: pwsh
+        run: ./scripts/test-offline-windows.ps1 -ExpectedHead $env:EXPECTED_SOURCE_SHA -EvidenceDirectory (Join-Path $env:RUNNER_TEMP 'offline-windows-evidence') -DownloadModules
+
+      - name: Retain exact source and test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: offline-windows-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/offline-windows-evidence
+          if-no-files-found: error
+          retention-days: 14
