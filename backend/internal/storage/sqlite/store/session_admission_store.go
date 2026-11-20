@@ -13,6 +13,10 @@ import (
 
 const admissionColumns = "id, project_id, operation, session_id, payload, state, generation, owner, attempts, failure_code, created_at, updated_at, available_at"
 
+// ErrAdmissionClientKeyConflict reports a durable key claim in a different
+// project. The caller maps it onto its public client-request conflict type.
+var ErrAdmissionClientKeyConflict = errors.New("admission client key belongs to another project")
+
 // Admission commands use a transactional compare-and-swap claim. The SQL is
 // kept beside the transaction so the claim's generation/owner predicates are
 // reviewed together; no generated sqlc files are edited.
@@ -42,16 +46,46 @@ func (s *Store) EnqueueSessionAdmission(ctx context.Context, rec domain.SessionA
 	if count >= 1024 {
 		return errors.New("session admission queue is full (1024 commands)")
 	}
-	_, err := s.writeDB.ExecContext(ctx, `INSERT INTO session_admission_queue
-		(id,project_id,operation,session_id,payload,state,created_at,updated_at,available_at)
-		VALUES (?,?,?,?,?,'queued',?,?,?) ON CONFLICT(id) DO NOTHING`,
-		rec.ID, rec.ProjectID, rec.Operation, rec.SessionID, rec.Payload,
-		admissionTime(rec.CreatedAt), admissionTime(rec.UpdatedAt), admissionTime(rec.AvailableAt))
+	// A Manager's in-flight key gate is local to that Manager. Serialize
+	// cross-Manager key ownership at the SQLite write statement instead:
+	// independent Store instances must not each enqueue a different project
+	// after both observed the key as free. Do not introduce a UNIQUE index:
+	// legacy/colliding rows must remain accessible for reconciliation.
+	var incoming struct{ ClientRequestID string }
+	if rec.Operation == "spawn" {
+		if err := json.Unmarshal([]byte(rec.Payload), &incoming); err != nil {
+			return fmt.Errorf("invalid admission spawn payload: %w", err)
+		}
+	}
+	var err error
+	if incoming.ClientRequestID != "" {
+		_, err = s.writeDB.ExecContext(ctx, `INSERT INTO session_admission_queue
+			(id,project_id,operation,session_id,payload,state,created_at,updated_at,available_at)
+			SELECT ?,?,?,?,?,'queued',?,?,?
+			WHERE NOT EXISTS (
+				SELECT 1 FROM session_admission_queue
+				WHERE operation='spawn' AND json_valid(payload)
+				AND json_extract(payload,'$.ClientRequestID')=? AND project_id<>?
+			)
+			ON CONFLICT(id) DO NOTHING`,
+			rec.ID, rec.ProjectID, rec.Operation, rec.SessionID, rec.Payload,
+			admissionTime(rec.CreatedAt), admissionTime(rec.UpdatedAt), admissionTime(rec.AvailableAt),
+			incoming.ClientRequestID, rec.ProjectID)
+	} else {
+		_, err = s.writeDB.ExecContext(ctx, `INSERT INTO session_admission_queue
+			(id,project_id,operation,session_id,payload,state,created_at,updated_at,available_at)
+			VALUES (?,?,?,?,?,'queued',?,?,?) ON CONFLICT(id) DO NOTHING`,
+			rec.ID, rec.ProjectID, rec.Operation, rec.SessionID, rec.Payload,
+			admissionTime(rec.CreatedAt), admissionTime(rec.UpdatedAt), admissionTime(rec.AvailableAt))
+	}
 	if err != nil {
 		return err
 	}
 	var project, operation, payload string
 	if err := s.writeDB.QueryRowContext(ctx, "SELECT project_id,operation,payload FROM session_admission_queue WHERE id=?", rec.ID).Scan(&project, &operation, &payload); err != nil {
+		if errors.Is(err, sql.ErrNoRows) && incoming.ClientRequestID != "" {
+			return ErrAdmissionClientKeyConflict
+		}
 		return err
 	}
 	if project != string(rec.ProjectID) || operation != rec.Operation || payload != rec.Payload {
