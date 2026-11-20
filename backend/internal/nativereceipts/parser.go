@@ -125,7 +125,8 @@ func (p *Parser) Line(ctx context.Context, data []byte, sink Sink) (bool, error)
 			return false, errors.New("native_usage_counters_invalid")
 		}
 		if err := sink.IngestBoundReceipt(ctx, r); err != nil {
-			if errors.Is(err, inferenceguard.ErrUnboundReceipt) && time.Since(r.ObservedAt) < 5*time.Minute && len(p.pending) < 128 {
+			age := time.Since(r.ObservedAt)
+			if errors.Is(err, inferenceguard.ErrUnboundReceipt) && age >= 0 && age < 5*time.Minute && len(p.pending) < 128 {
 				p.pending[r.SourceKey] = r
 			}
 			return false, fmt.Errorf("receipt ingest: %w", err)
@@ -139,6 +140,13 @@ func (p *Parser) Line(ctx context.Context, data []byte, sink Sink) (bool, error)
 func (p *Parser) RetryPending(ctx context.Context, sink Sink) (int, error) {
 	accepted := 0
 	for id, r := range p.pending {
+		// A provider timestamp is not permission to extend the retry window.
+		// Check before even attempting ingestion: the sink may have become
+		// bound since the last sweep, but an expired receipt stays expired.
+		if age := time.Since(r.ObservedAt); age < 0 || age >= 5*time.Minute {
+			delete(p.pending, id)
+			continue
+		}
 		err := sink.IngestBoundReceipt(ctx, r)
 		if err == nil {
 			delete(p.pending, id)
@@ -147,9 +155,6 @@ func (p *Parser) RetryPending(ctx context.Context, sink Sink) (int, error) {
 		}
 		if !errors.Is(err, inferenceguard.ErrUnboundReceipt) {
 			return accepted, err
-		}
-		if time.Since(r.ObservedAt) > 5*time.Minute {
-			delete(p.pending, id)
 		}
 	}
 	return accepted, nil
