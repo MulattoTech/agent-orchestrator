@@ -334,16 +334,22 @@ func kimiSourceOAuthAuthorized(sourceHome string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("read source Kimi config %s: %w", configPath, err)
 	}
+	// Probe all configured references before rejecting this source. Path order
+	// is stable, so an unusable set still reports a deterministic first error.
+	var firstErr error
 	for _, path := range paths {
 		status, ok, err := kimiCredentialsAuthStatus(path)
 		if err != nil {
-			return false, fmt.Errorf("read source Kimi credentials %s: %w", path, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("read source Kimi credentials %s: %w", path, err)
+			}
+			continue
 		}
 		if ok && status == ports.AgentAuthStatusAuthorized {
 			return true, nil
 		}
 	}
-	return false, nil
+	return false, firstErr
 }
 
 func kimiConfigCanSeed(existing []byte) bool {
