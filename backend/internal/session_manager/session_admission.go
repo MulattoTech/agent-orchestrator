@@ -25,6 +25,8 @@ var (
 	ErrWorkspaceOwnershipUnknown  = errors.New("WORKSPACE_OWNERSHIP_UNKNOWN")
 )
 
+var errAdmissionRestoreOutcomeUnknown = errors.New("admission restore outcome requires reconciliation")
+
 // SessionQueuedError identifies the durable command; it does not pretend that
 // a worker was created. Retrying the command with the same client key is safe.
 type SessionQueuedError struct{ RequestID string }
@@ -487,6 +489,12 @@ func (m *Manager) DispatchAdmissionQueue(ctx context.Context, maxClaims int) err
 				if err == nil && !found {
 					err = ErrNotFound
 				}
+				if err == nil && !session.IsTerminated {
+					// A live row precedes restore initialization and prompt delivery.
+					// Even a separate manual restore is not a completion receipt for
+					// this queued command; preserve the uncertainty without replay.
+					err = errAdmissionRestoreOutcomeUnknown
+				}
 				if err == nil && session.IsTerminated && session.CleanupGeneration != wanted.CleanupGeneration {
 					err = errors.New("STALE_RESTORE_REQUEST")
 				}
@@ -519,9 +527,11 @@ func (m *Manager) DispatchAdmissionQueue(ctx context.Context, maxClaims int) err
 			request.State = "queued"
 			request.FailureCode = "SESSION_CAPACITY_REACHED"
 			request.AvailableAt = now.Add(2 * time.Second)
-		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrClientRequestIncomplete):
-			// A process might have started before cancellation. Never retry an
-			// ambiguous command with a fresh identity.
+		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(err, ErrClientRequestIncomplete) || errors.Is(err, errAdmissionRestoreOutcomeUnknown):
+			// A process might have started before cancellation, or a restore
+			// might have published its live row before finishing initialization.
+			// Never replay or acknowledge an ambiguous command.
 			request.State = "blocked"
 			request.FailureCode = "OUTCOME_REQUIRES_RECONCILIATION"
 		default:
