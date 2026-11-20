@@ -270,6 +270,7 @@ var shippedMigrations = map[int64]string{
 	20261116040000629: "20261116040000629_session_admission_queue.sql",
 
 	20261116060406021: "20261116060406021_review_publication_attempt.sql",
+	20261120081333842: "20261120081333842_session_admission_client_key_lookup.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

@@ -235,6 +235,7 @@ type sessionAdmissionStore interface {
 	EnqueueSessionAdmission(context.Context, domain.SessionAdmissionRequest) error
 	ListSessionAdmission(context.Context) ([]domain.SessionAdmissionRequest, error)
 	GetSessionAdmission(context.Context, string) (domain.SessionAdmissionRequest, bool, error)
+	HasSessionAdmissionClientKeyConflict(context.Context, string, domain.ProjectID) (bool, error)
 	ClaimSessionAdmission(context.Context, string, time.Time) (domain.SessionAdmissionRequest, bool, error)
 	CompleteSessionAdmission(context.Context, domain.SessionAdmissionRequest) (bool, error)
 	RecoverSessionAdmission(context.Context, string, time.Time) error
@@ -293,6 +294,15 @@ func (m *Manager) existingSpawnAdmission(ctx context.Context, cfg ports.SpawnCon
 	store, ok := m.store.(sessionAdmissionStore)
 	if !ok {
 		return nil
+	}
+	// Session receipts and the in-flight gate use global client keys. Keep that
+	// scope before a receipt exists without changing legacy admission IDs.
+	conflict, err := store.HasSessionAdmissionClientKeyConflict(ctx, cfg.ClientRequestID, cfg.ProjectID)
+	if err != nil {
+		return err
+	}
+	if conflict {
+		return ErrClientRequestConflict
 	}
 	request, found, err := store.GetSessionAdmission(ctx, spawnAdmissionRequestID(cfg.ProjectID, cfg.ClientRequestID))
 	if err != nil || !found {
