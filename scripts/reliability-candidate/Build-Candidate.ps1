@@ -76,7 +76,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $releaseDir 'offline-test-allowlist.txt'), $match.Groups[1].Value + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
     foreach ($name in @('Candidate.Common.ps1', 'Build-Candidate.ps1', 'Run-Offline-Fleet.ps1', 'Run-Offline-ConPTY.ps1', 'Run-Offline-Daemon.ps1',
         'Start-PostRefresh-Validation.ps1', 'Stop-Candidate.ps1', 'Test-CandidateScripts.ps1',
-        'Test-CandidateACLDiagnostics.ps1', 'policy.template.json', 'README.md')) {
+        'Test-CandidateACLDiagnostics.ps1', 'Test-CandidateBundleACL.ps1', 'policy.template.json', 'README.md')) {
         Copy-Item -LiteralPath (Join-Path $packageSource $name) -Destination (Join-Path $releaseDir $name) -ErrorAction Stop
     }
     Set-Location $repo

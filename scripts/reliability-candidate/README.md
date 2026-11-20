@@ -79,6 +79,20 @@ Hashes detect accidental changes relative to the locally issued manifest; they
 are not a third-party signature. Preserve the final manifest hash in the repair
 evidence before using the candidate.
 
+Shared bundle verification checks directory ancestry and the individual ACLs of
+the manifest, digest, and every recorded payload before reading or hashing those
+files. It rejects untrusted owners and file write, append, attribute, delete,
+DACL-change, or owner-change grants. Read/execute access to payloads and
+create-only rights on directory ancestors remain allowed. This check applies to
+all three offline runners as well as the post-refresh launcher; it never repairs
+permissions. The invoking PowerShell scripts and helper must already be trusted:
+runners bootstrap the helper before this shared verifier executes. Self-checks
+in an unsigned bundle cannot authenticate untrusted script code.
+
+`Test-CandidateScripts.ps1` includes descriptor and full bundle regressions with
+in-memory files, hashes, and ACLs. It launches no candidate executable and reads
+or changes no real filesystem ACLs.
+
 ## Offline fleet exercise
 
 From the compiled release directory:

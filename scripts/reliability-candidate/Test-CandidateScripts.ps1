@@ -27,8 +27,10 @@ if (-not $commonText.Contains('function Initialize-CandidateReleaseRoot') -or
     $commonText.Contains('C:\AODev\releases')) {
     throw 'Candidate release root must be protected, verified and independent of AODev.'
 }
-if (-not $sources['Build-Candidate.ps1'].Contains('''Test-CandidateACLDiagnostics.ps1''')) {
-    throw 'Release build must package the synthetic ACL behavioral tests.'
+foreach ($testScript in @('Test-CandidateACLDiagnostics.ps1', 'Test-CandidateBundleACL.ps1')) {
+    if (-not $sources['Build-Candidate.ps1'].Contains("'$testScript'")) {
+        throw "Release build must package the synthetic ACL behavioral test: $testScript"
+    }
 }
 if (-not $sources['Build-Candidate.ps1'].Contains('$releaseParent = Initialize-CandidateReleaseRoot')) {
     throw 'Build must initialize the private release root before compilation.'
@@ -77,8 +79,9 @@ $fleetCalls = @($run.FindAll({
 if ($fleetCalls.Count -ne 1 -or $fleetCalls[0].CommandElements.Count -ne 1 -or $run.ParamBlock.Parameters.Count -ne 0) {
     throw 'Offline fleet must execute its compiled allowlist with no external arguments.'
 }
-if ($sources['Run-Offline-Fleet.ps1'].IndexOf('Assert-CandidateBundle') -gt $fleetCalls[0].Extent.StartOffset) {
-    throw 'Offline executable is used before hash verification.'
+$fleetBundleAt = $sources['Run-Offline-Fleet.ps1'].IndexOf('Assert-CandidateBundle')
+if ($fleetBundleAt -lt 0 -or $fleetBundleAt -gt $fleetCalls[0].Extent.StartOffset) {
+    throw 'Offline executable requires shared bundle verification before execution.'
 }
 $conpty = $asts['Run-Offline-ConPTY.ps1']
 $conptyText = $sources['Run-Offline-ConPTY.ps1']
@@ -89,7 +92,8 @@ $conptyCalls = @($conpty.FindAll({
 if ($conptyCalls.Count -ne 1 -or $conptyCalls[0].CommandElements.Count -ne 1 -or $conpty.ParamBlock.Parameters.Count -ne 0) {
     throw 'Offline ConPTY runner must execute only its fixed companion with no arguments.'
 }
-if ($conptyText.IndexOf('Assert-CandidateBundle') -gt $conptyCalls[0].Extent.StartOffset -or
+if ($conptyText.IndexOf('Assert-CandidateBundle') -lt 0 -or
+    $conptyText.IndexOf('Assert-CandidateBundle') -gt $conptyCalls[0].Extent.StartOffset -or
     $conptyText.IndexOf("SetEnvironmentVariable('AO_CONPTY_FIXTURE_OWNER', "+'$null') -lt 0 -or
     $conptyText.IndexOf("SetEnvironmentVariable('AO_CONPTY_FIXTURE_OWNER', "+'$null') -gt $conptyCalls[0].Extent.StartOffset) {
     throw 'ConPTY companion must verify hashes and clear caller-selected owner mode before execution.'
@@ -217,7 +221,7 @@ foreach ($required in @('processStartTicksUtc', 'executableSHA256', 'Get-NetTCPC
     if (-not $commonText.Contains($required)) { throw "Missing ownership/hash validation: $required" }
 }
 foreach ($category in @('AO_ACL_OWNER_OR_DACL_UNVERIFIED', 'AO_ACL_UNSUPPORTED_ALLOW_ACE',
-    'AO_ACL_UNTRUSTED_PRIVATE_ALLOW', 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW')) {
+    'AO_ACL_UNTRUSTED_PRIVATE_ALLOW', 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW', 'AO_ACL_UNTRUSTED_FILE_MUTATION_ALLOW')) {
     if (-not $commonText.Contains($category)) { throw "Missing fail-closed ACL diagnostic category: $category" }
 }
 if ($commonText -match '\.SetOwner\(' -or $commonText -match '\.SetAudit' -or $commonText -match 'RunAs') {
@@ -246,5 +250,6 @@ foreach ($role in @('orchestrator', 'implementation', 'complex', 'reviewer', 'li
     }
 }
 & (Join-Path $PSScriptRoot 'Test-CandidateACLDiagnostics.ps1')
-Write-Output "PASS: parsed $($asts.Count) PowerShell scripts and verified synthetic ACL decisions; build is compile-only, fleet/ConPTY/daemon arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
-Write-Output 'Scope: AST/static and in-memory synthetic descriptor validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'
+& (Join-Path $PSScriptRoot 'Test-CandidateBundleACL.ps1')
+Write-Output "PASS: parsed $($asts.Count) PowerShell scripts and verified synthetic ACL and bundle decisions; build is compile-only, fleet/ConPTY/daemon arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
+Write-Output 'Scope: AST/static and in-memory synthetic descriptor/bundle validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'
