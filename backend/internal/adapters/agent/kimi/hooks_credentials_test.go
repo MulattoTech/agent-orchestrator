@@ -146,7 +146,7 @@ func TestSeedKimiCredentialsPreservesPendingRecoveryOnRetry(t *testing.T) {
 	for _, scopedSource := range []bool{false, true} {
 		name := "eligible source"
 		if scopedSource {
-			name = "source eligibility changed"
+			name = "source changed to scoped configuration"
 		}
 		t.Run(name, func(t *testing.T) {
 			f := newKimiRecoveryFixture(t, true)
@@ -170,8 +170,8 @@ func TestSeedKimiCredentialsPreservesPendingRecoveryOnRetry(t *testing.T) {
 			assertKimiRecoveryFiles(t, aside, f.targetFiles)
 
 			if scopedSource {
-				// A scoped-only profile is ineligible for sharing, but the
-				// seed caller can still copy its explicitly referenced login.
+				// Switch from a legacy login to a configured scoped login.
+				// Pending recovery must still block another seed attempt.
 				if err := os.Remove(filepath.Join(f.sourceHome, "credentials", "kimi-code.json")); err != nil {
 					t.Fatal(err)
 				}
