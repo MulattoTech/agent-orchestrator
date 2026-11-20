@@ -14,8 +14,16 @@ import (
 )
 
 func prepareDispatchGuard(dataDir, session, role, model, effort string, readOnly bool) (*inferenceguard.Gate, inferenceguard.Selection, error) {
+	g, s, _, err := prepareDispatchGuardForRecovery(dataDir, session, role, model, effort, readOnly, "")
+	return g, s, err
+}
+
+// A recovery thread is supplied only by Reconnect. It may defer a capacity
+// refusal for observation of that host's exact bound unsettled turn; all other
+// admission refusals stay closed, and actual sends still use the dispatch gate.
+func prepareDispatchGuardForRecovery(dataDir, session, role, model, effort string, readOnly bool, recoveryThread string) (*inferenceguard.Gate, inferenceguard.Selection, bool, error) {
 	if !inferenceguard.Enabled() {
-		return nil, inferenceguard.Selection{}, nil
+		return nil, inferenceguard.Selection{}, false, nil
 	}
 	if role == "" {
 		role = "implementation"
@@ -25,13 +33,20 @@ func prepareDispatchGuard(dataDir, session, role, model, effort string, readOnly
 	}
 	g, err := inferenceguard.ForDataDir(dataDir)
 	if err != nil {
-		return nil, inferenceguard.Selection{}, err
+		return nil, inferenceguard.Selection{}, false, err
 	}
+	observationOnly := false
 	if err := g.Check(context.Background()); err != nil {
-		return nil, inferenceguard.Selection{}, err
+		if recoveryThread == "" || !errors.Is(err, inferenceguard.ErrCapacity) {
+			return nil, inferenceguard.Selection{}, false, err
+		}
+		if err := g.VerifyNativeRecovery(context.Background(), session, recoveryThread); err != nil {
+			return nil, inferenceguard.Selection{}, false, err
+		}
+		observationOnly = true
 	}
 	s, err := g.Resolve(role, session, model, effort)
-	return g, s, err
+	return g, s, observationOnly, err
 }
 func (c *conversation) attachDispatchGuard(g *inferenceguard.Gate, s inferenceguard.Selection, session string, project domain.ProjectID) {
 	c.guard = g
