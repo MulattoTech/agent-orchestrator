@@ -2,8 +2,11 @@ package nativereceipts
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"hash"
 	"io"
 	"io/fs"
 	"os"
@@ -35,6 +38,12 @@ type cursor struct {
 	info    fs.FileInfo
 	offset  int64
 	parser  *Parser
+	// Bind all complete lines offered to the parser, including a failed line
+	// whose replay position has not advanced. Retry must not hash it twice.
+	prefixEnd    int64
+	prefixHash   hash.Hash
+	verifyOffset int64
+	verifyHash   hash.Hash
 }
 type Observer struct {
 	mu      sync.Mutex
@@ -315,6 +324,12 @@ func (r *countedReceiptReader) Read(p []byte) (int, error) {
 }
 
 func (o *Observer) read(ctx context.Context, path string, b Binding, budget int64, s *SourceStatus) (bytesRead int64, pending bool, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return 0, true, err
+	}
+	if budget <= 0 {
+		return 0, true, nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, false, err
@@ -324,17 +339,53 @@ func (o *Observer) read(ctx context.Context, path string, b Binding, budget int6
 	if err != nil || !info.Mode().IsRegular() {
 		return 0, false, errors.New("native_file_not_regular")
 	}
+	counted := &countedReceiptReader{reader: io.LimitReader(f, budget)}
+	defer func() { bytesRead = counted.bytes }()
 	c := o.cursors[path]
-	// Rebuild cached context before pending retries for observable rewrites.
-	// Regrowth beyond the last observed size, or size+mtime-preserving rewrites,
-	// remains undetected; these metadata checks do not verify the full prefix.
-	if c == nil || !os.SameFile(c.info, info) || info.Size() < c.offset || c.binding != b ||
-		info.Size() < c.info.Size() || (info.Size() == c.info.Size() && !info.ModTime().Equal(c.info.ModTime())) {
-		c = &cursor{binding: b, info: info, parser: NewParser(b)}
+	reset := func() {
+		c = &cursor{binding: b, info: info, parser: NewParser(b), prefixHash: sha256.New()}
 		o.cursors[path] = c
 	}
-	// Compare the next sweep with this observation, not cursor creation time.
+	// Keep the metadata reset fast path, including the latest size observation.
+	// Content verification below also detects quiescent same-metadata rewrites.
+	if c == nil || !os.SameFile(c.info, info) || info.Size() < c.offset || c.binding != b ||
+		info.Size() < c.info.Size() || (info.Size() == c.info.Size() && !info.ModTime().Equal(c.info.ModTime())) ||
+		info.Size() < c.prefixEnd {
+		reset()
+	}
 	c.info = info
+	if c.prefixEnd > 0 {
+		if c.verifyHash == nil {
+			c.verifyHash = sha256.New()
+			c.verifyOffset = 0
+		}
+		if _, err = f.Seek(c.verifyOffset, io.SeekStart); err != nil {
+			return 0, true, err
+		}
+		// Revalidate the whole parser-state prefix before pending retries or
+		// continuation. Appends do not extend this target while proof is pending.
+		// Half a full file budget leaves room for a maximum-sized JSONL record;
+		// all verification reads share the same physical IO charge as tail reads.
+		n, verifyErr := io.CopyN(c.verifyHash, counted, min(c.prefixEnd-c.verifyOffset, max(int64(1), budget/2)))
+		c.verifyOffset += n
+		if verifyErr != nil {
+			c.verifyHash = nil
+			c.verifyOffset = 0
+			return 0, true, verifyErr
+		}
+		if c.verifyOffset < c.prefixEnd {
+			return 0, true, nil
+		}
+		matches := bytes.Equal(c.verifyHash.Sum(nil), c.prefixHash.Sum(nil))
+		c.verifyHash = nil
+		c.verifyOffset = 0
+		if !matches {
+			reset()
+		}
+	}
+	// A full prefix read adds IO and may span sweeps before cached state can be
+	// used. It is not an atomic snapshot against concurrent in-place mutation,
+	// including changes to already-verified chunks with preserved metadata.
 	accepted, retryErr := c.parser.RetryPending(ctx, o.sink)
 	s.ObservedReceipts += int64(accepted)
 	if retryErr != nil {
@@ -343,11 +394,10 @@ func (o *Observer) read(ctx context.Context, path string, b Binding, budget int6
 	if _, err = f.Seek(c.offset, io.SeekStart); err != nil {
 		return 0, false, err
 	}
-	counted := &countedReceiptReader{reader: io.LimitReader(f, budget)}
-	defer func() { bytesRead = counted.bytes }()
+	tailBudget := budget - counted.bytes
 	r := bufio.NewReaderSize(counted, 64<<10)
 	var read int64
-	for read < budget {
+	for read < tailBudget {
 		if err = ctx.Err(); err != nil {
 			return read, true, err
 		}
@@ -369,6 +419,11 @@ func (o *Observer) read(ctx context.Context, path string, b Binding, budget int6
 				return read, true, e
 			}
 			break
+		}
+		end := c.offset + int64(len(line))
+		if end > c.prefixEnd {
+			_, _ = c.prefixHash.Write(line[max(int64(0), c.prefixEnd-c.offset):])
+			c.prefixEnd = end
 		}
 		accepted, parseErr := c.parser.Line(ctx, line, o.sink)
 		if parseErr != nil {
