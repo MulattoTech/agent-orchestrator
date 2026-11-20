@@ -17,8 +17,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $IsWindows) { throw 'This finite suite requires Windows' }
 $Repo = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
-$Go = (Get-Command -Name $GoExecutable -CommandType Application -ErrorAction Stop).Source
-$Git = (Get-Command -Name 'git.exe' -CommandType Application -ErrorAction Stop).Source
+$Go = (Get-Command -Name $GoExecutable -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$Git = (Get-Command -Name 'git.exe' -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $GoRoot = Split-Path (Split-Path $Go -Parent) -Parent
 $Utf8 = [Text.UTF8Encoding]::new($false)
 if (-not [IO.Path]::IsPathFullyQualified($EvidenceDirectory)) { throw 'EvidenceDirectory must be absolute' }
