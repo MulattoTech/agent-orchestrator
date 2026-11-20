@@ -203,7 +203,7 @@ try {
     if ([IO.File]::ReadAllText((Join-Path $Repo 'backend/go.mod')) -notmatch '(?m)^go 1\.27\.4\r?$') { throw 'go.mod must retain the reviewed Go 1.27.4 directive' }
     $selection = Get-Content -Raw -LiteralPath $SelectionPath | ConvertFrom-Json -AsHashtable
     $SelectionSHA256 = (Get-FileHash -LiteralPath $SelectionPath).Hash
-    if ($selection.schema -cne 'ao-offline-windows-selection-v1' -or $selection.go_version -cne '1.27.4' -or $selection.runs.Count -ne 5 -or $selection.expected_total.top -ne 40 -or $selection.expected_total.nested -ne 60 -or $selection.expected_total.leaf -ne 91) { throw 'Unexpected finite selection totals' }
+    if ($selection.schema -cne 'ao-offline-windows-selection-v1' -or $selection.go_version -cne '1.27.4' -or $selection.runs.Count -ne 5 -or $selection.expected_total.top -ne 44 -or $selection.expected_total.nested -ne 87 -or $selection.expected_total.leaf -ne 118) { throw 'Unexpected finite selection totals' }
     $safeTop = @(
         'TestAdmissionNativeWorkerSnapshotSelection',
         'TestInferenceGuardChildCompletionCannotReleaseRootLease',
@@ -244,7 +244,11 @@ try {
         'TestObserverRejectsMismatchedNativeIdentityAndCancellation',
         'TestObserverReplaysObservableFileRewrite',
         'TestReceiptBeforeAcknowledgementRetriesWithoutReplayingFile',
-        'TestUnknownUsageDoesNotBecomeZero'
+        'TestUnknownUsageDoesNotBecomeZero',
+        'TestWindowsSnapshotRejectsUncertainHandoff',
+        'TestWindowsSnapshotEnumerationFailuresRemainUnknown',
+        'TestObserverAuthenticatesPrefixBeforeCachedState',
+        'TestObserverPrefixVerificationMakesBoundedProgress'
     )
     $selectedTop = @()
     $expectedPackages = @('./internal/adapters/agent/kimi','./internal/adapters/chatdriver/codexappserver','./internal/session_manager','./internal/procmem','./internal/nativereceipts')
@@ -304,7 +308,7 @@ try {
     $result = [ordered]@{
         schema='ao-offline-windows-source-validation-v1'; result=if($pass){'PASS'}else{'FAIL'}; expected_head=$ExpectedHead; repository=$Repo; evidence=$RunRoot; fixture_root=$StateRoot;
         started_utc=$Started; finished_utc=[DateTime]::UtcNow.ToString('o'); selection_sha256=$SelectionSHA256; runner_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash;
-        expected_coverage=[ordered]@{top=40;nested=60;leaf=91}; dependency_bootstrap_enabled=[bool]$DownloadModules; phases=@($Phases.ToArray()); failures=@($Failures.ToArray());
+        expected_coverage=[ordered]@{top=44;nested=87;leaf=118}; dependency_bootstrap_enabled=[bool]$DownloadModules; phases=@($Phases.ToArray()); failures=@($Failures.ToArray());
         scope='Finite synthetic source tests only: Kimi file copy/retry, in-memory bound-turn reconnect, pure process/worker metrics, and receipt recovery in temporary files with memory sinks. No native worker fixture, AO, ConPTY, daemon, provider/authentication or real-profile qualification.'
     }
     Write-Json (Join-Path $RunRoot 'result.json') $result
