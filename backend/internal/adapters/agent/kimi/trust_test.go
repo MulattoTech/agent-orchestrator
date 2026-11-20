@@ -108,11 +108,15 @@ func TestKimiWorkdirKeyMatchesKimiCodeLayout(t *testing.T) {
 }
 
 func TestEnsureWorkspaceTrustedSeedsRealKimiHome(t *testing.T) {
-	// Not parallel: isolates HOME/KIMI_CODE_HOME so the seed lands in a
-	// throwaway home instead of the developer's real one.
+	// Not parallel: isolates the Unix and Windows home variables so the
+	// default-home fallback cannot write into the developer's real profile.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("KIMI_CODE_HOME", "")
+	if resolved, err := os.UserHomeDir(); err != nil || resolved != home {
+		t.Fatalf("test home = %q, %v; want isolated home %q", resolved, err, home)
+	}
 
 	workspace := filepath.Join(t.TempDir(), "auth-workspace", "kimi")
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
