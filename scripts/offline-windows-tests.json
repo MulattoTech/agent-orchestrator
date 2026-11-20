@@ -2,9 +2,9 @@
   "schema": "ao-offline-windows-selection-v1",
   "go_version": "1.27.4",
   "expected_total": {
-    "top": 44,
-    "nested": 87,
-    "leaf": 118
+    "top": 47,
+    "nested": 102,
+    "leaf": 134
   },
   "runs": [
     {
@@ -181,10 +181,10 @@
       "package_ids": [
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts"
       ],
-      "regex": "^(TestConflictingThreadOwnershipCannotBeReintroducedByThirdBinding|TestNativeResponseCountersIgnoreCumulativeAndBindExactContext|TestObserverAuthenticatesPrefixBeforeCachedState|TestObserverChargesMalformedAndOversizedReadsWithoutAdvancingCheckpoint|TestObserverChargesPartialRecordsToSweepBudgetAndDoesNotStarveFinalFile|TestObserverFortyThreadsPartialAppendRestartAndForeignFile|TestObserverPrefixVerificationMakesBoundedProgress|TestObserverPreservesCheckpointOnOrdinaryAppend|TestObserverRejectsMismatchedNativeIdentityAndCancellation|TestObserverReplaysObservableFileRewrite|TestReceiptBeforeAcknowledgementRetriesWithoutReplayingFile|TestUnknownUsageDoesNotBecomeZero)$",
-      "expected_top": 12,
-      "expected_nested": 13,
-      "expected_leaf": 21,
+      "regex": "^(TestConflictingThreadOwnershipCannotBeReintroducedByThirdBinding|TestNativeResponseCountersIgnoreCumulativeAndBindExactContext|TestObserverAuthenticatesPrefixBeforeCachedState|TestObserverChargesMalformedAndOversizedReadsWithoutAdvancingCheckpoint|TestObserverChargesPartialRecordsToSweepBudgetAndDoesNotStarveFinalFile|TestObserverFortyThreadsPartialAppendRestartAndForeignFile|TestObserverFutureDatedUnboundReceiptDoesNotPersist|TestObserverPrefixVerificationMakesBoundedProgress|TestObserverPreservesCheckpointOnOrdinaryAppend|TestObserverRejectsMismatchedNativeIdentityAndCancellation|TestObserverReplaysObservableFileRewrite|TestParserPendingReceiptExpiryWindow|TestReceiptBeforeAcknowledgementRetriesWithoutReplayingFile|TestUnknownUsageDoesNotBecomeZero)$",
+      "expected_top": 14,
+      "expected_nested": 19,
+      "expected_leaf": 28,
       "test_ids": [
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestConflictingThreadOwnershipCannotBeReintroducedByThirdBinding",
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestNativeResponseCountersIgnoreCumulativeAndBindExactContext",
@@ -199,6 +199,7 @@
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverChargesMalformedAndOversizedReadsWithoutAdvancingCheckpoint/oversized",
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverChargesPartialRecordsToSweepBudgetAndDoesNotStarveFinalFile",
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverFortyThreadsPartialAppendRestartAndForeignFile",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverFutureDatedUnboundReceiptDoesNotPersist",
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverPrefixVerificationMakesBoundedProgress",
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverPrefixVerificationMakesBoundedProgress/binding_change_discards_incomplete_verification",
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverPrefixVerificationMakesBoundedProgress/uncommitted_line_retry_is_not_hashed_twice",
@@ -209,8 +210,40 @@
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverReplaysObservableFileRewrite",
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverReplaysObservableFileRewrite/same_size_replacement_after_append",
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestObserverReplaysObservableFileRewrite/shrink_above_offset_rebuilds_model_context",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestParserPendingReceiptExpiryWindow",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestParserPendingReceiptExpiryWindow/canceled_retry_preserves_unresolved",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestParserPendingReceiptExpiryWindow/expired_bound_receipt_never_commits",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestParserPendingReceiptExpiryWindow/future_bound_receipt_never_commits",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestParserPendingReceiptExpiryWindow/future_timestamp_pruned",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestParserPendingReceiptExpiryWindow/old_timestamp_pruned",
+        "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestParserPendingReceiptExpiryWindow/recent_timestamp_remains_bounded",
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestReceiptBeforeAcknowledgementRetriesWithoutReplayingFile",
         "github.com/aoagents/agent-orchestrator/backend/internal/nativereceipts::TestUnknownUsageDoesNotBecomeZero"
+      ]
+    },
+    {
+      "name": "fleetpressure-pid-reopen",
+      "packages": [
+        "./internal/fleetpressure"
+      ],
+      "package_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure"
+      ],
+      "regex": "^(TestWindowsHandleCountRequiresSnapshotIdentity)$",
+      "expected_top": 1,
+      "expected_nested": 9,
+      "expected_leaf": 9,
+      "test_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure::TestWindowsHandleCountRequiresSnapshotIdentity",
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure::TestWindowsHandleCountRequiresSnapshotIdentity/already_cancelled_touches_no_handles",
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure::TestWindowsHandleCountRequiresSnapshotIdentity/cancel_after_first_closes_first_and_stops",
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure::TestWindowsHandleCountRequiresSnapshotIdentity/count_failure_is_unknown",
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure::TestWindowsHandleCountRequiresSnapshotIdentity/creation_query_failure_is_unknown",
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure::TestWindowsHandleCountRequiresSnapshotIdentity/missing_snapshot_identity_is_unknown",
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure::TestWindowsHandleCountRequiresSnapshotIdentity/open_failure_is_unknown",
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure::TestWindowsHandleCountRequiresSnapshotIdentity/reopened_identity_unavailable_is_unknown",
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure::TestWindowsHandleCountRequiresSnapshotIdentity/reused_PID_must_not_attribute_unrelated_handles",
+        "github.com/aoagents/agent-orchestrator/backend/internal/fleetpressure::TestWindowsHandleCountRequiresSnapshotIdentity/same_process_identity"
       ]
     }
   ]
