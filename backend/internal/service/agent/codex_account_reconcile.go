@@ -69,7 +69,7 @@ func (m *codexAccountManager) runAccountStoreInitialization(call *accountReconci
 		m.accountStoreNextRetry = m.now().Add(delay)
 		var failure *codexAccountLocalFailure
 		if errors.As(err, &failure) {
-			m.logger.Warn("Codex account store initialization failed", "reasonCode", failure.reason, "retryable", failure.retryable)
+			m.logger.Warn("Codex account store initialization failed", "reasonCode", failure.reason, "retryable", failure.retryable, "operation", failure.operation)
 		}
 	}
 	call.err = err
@@ -84,6 +84,7 @@ func (m *codexAccountManager) runAccountStoreInitialization(call *accountReconci
 type codexAccountLocalFailure struct {
 	reason    string
 	retryable bool
+	operation string // Fixed path-free diagnostic category, never a filesystem path.
 }
 
 func (e *codexAccountLocalFailure) Error() string { return e.reason }
@@ -93,6 +94,16 @@ func accountStoreFailure(reason string, retryable bool) error {
 }
 
 func accountStoreStorageFailure(err error) error {
+	return accountStoreStorageFailureAt("unspecified", err)
+}
+
+// Only fixed categories may reach logs; never include a filesystem path.
+func accountStoreStorageFailureAt(operation string, err error) error {
+	switch operation {
+	case "pending_cleanup", "switch_staging", "catalog_refresh":
+	default:
+		operation = "unspecified"
+	}
 	// Filesystem validation failures are plain errors, deliberately fail closed.
 	// Only recognizable I/O failures are eligible for another attempt. The
 	// secure-file helpers summarize their cause behind an opaque, path-free
@@ -104,22 +115,22 @@ func accountStoreStorageFailure(err error) error {
 	isIOFault := errors.As(err, &pathErr) || errors.As(err, &linkErr)
 	retryable := isIOFault && !errors.Is(err, os.ErrPermission) && !errors.Is(err, os.ErrExist) && !errors.Is(err, syscall.ENOTDIR) && !errors.Is(err, syscall.ELOOP)
 	if !retryable {
-		return accountStoreFailure("account_storage_unsafe", false)
+		return &codexAccountLocalFailure{reason: "account_storage_unsafe", retryable: false, operation: operation}
 	}
-	return accountStoreFailure("account_storage_unavailable", true)
+	return &codexAccountLocalFailure{reason: "account_storage_unavailable", retryable: true, operation: operation}
 }
 
 func (m *codexAccountManager) initializeAccountStore() error {
 	if err := cleanupPendingCredentialHomes(m.pendingRoot); err != nil {
-		return accountStoreStorageFailure(err)
+		return accountStoreStorageFailureAt("pending_cleanup", err)
 	}
 	// Durable switches keep their private target snapshot here across a daemon
 	// restart. The switch coordinator removes terminal operation data.
 	if err := ensurePrivateDirectory(m.switchStagingRoot); err != nil {
-		return accountStoreStorageFailure(err)
+		return accountStoreStorageFailureAt("switch_staging", err)
 	}
 	if err := m.catalog.refresh(); err != nil {
-		return accountStoreStorageFailure(err)
+		return accountStoreStorageFailureAt("catalog_refresh", err)
 	}
 	return nil
 }
