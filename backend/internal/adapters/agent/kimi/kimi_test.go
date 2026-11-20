@@ -275,7 +275,18 @@ func TestGetRestoreCommandNoID(t *testing.T) {
 	}
 }
 
+// cfg.Env isolates the hook destination, but credential seeding resolves its
+// source from the process environment. Hook-only tests need an empty source;
+// credential-seeding tests below provide their own explicit source fixtures.
+func isolateKimiHookSources(t *testing.T) {
+	t.Helper()
+	sourceHome := t.TempDir()
+	t.Setenv(kimiCodeHomeEnv, sourceHome)
+	t.Setenv("KIMI_SHARE_DIR", sourceHome)
+}
+
 func TestGetAgentHooksInstallsSystemPromptInstructions(t *testing.T) {
+	isolateKimiHookSources(t)
 	workspace := t.TempDir()
 	kimiHome := t.TempDir()
 
@@ -336,6 +347,7 @@ func TestKimiInstructionsPathUsesProviderDiscoveredDirectory(t *testing.T) {
 }
 
 func TestGetAgentHooksInstallsKimiConfigHooksWithoutSystemPrompt(t *testing.T) {
+	isolateKimiHookSources(t)
 	workspace := t.TempDir()
 	kimiHome := t.TempDir()
 	configPath := filepath.Join(kimiHome, "config.toml")
@@ -798,6 +810,7 @@ func TestGetAgentHooksReseedsAOManagedConfigWithoutAuth(t *testing.T) {
 }
 
 func TestGetAgentHooksRewritesManagedKimiConfigBlock(t *testing.T) {
+	isolateKimiHookSources(t)
 	workspace := t.TempDir()
 	kimiHome := t.TempDir()
 	configPath := filepath.Join(kimiHome, "config.toml")
@@ -842,6 +855,7 @@ func TestGetAgentHooksRewritesManagedKimiConfigBlock(t *testing.T) {
 // four lifecycle hooks; the next GetAgentHooks must rewrite it in place to the
 // current block instead of leaving those sessions on idle mid-turn.
 func TestGetAgentHooksRewritesLegacyFourHookManagedBlock(t *testing.T) {
+	isolateKimiHookSources(t)
 	workspace := t.TempDir()
 	kimiHome := t.TempDir()
 	configPath := filepath.Join(kimiHome, "config.toml")
@@ -922,6 +936,7 @@ func TestGetAgentHooksRequiresAOManagedKimiHome(t *testing.T) {
 }
 
 func TestGetAgentHooksReadsSystemPromptFile(t *testing.T) {
+	isolateKimiHookSources(t)
 	workspace := t.TempDir()
 	kimiHome := t.TempDir()
 	promptFile := filepath.Join(t.TempDir(), "system.md")
@@ -947,6 +962,7 @@ func TestGetAgentHooksReadsSystemPromptFile(t *testing.T) {
 }
 
 func TestGetAgentHooksPreservesUserInstructions(t *testing.T) {
+	isolateKimiHookSources(t)
 	workspace := t.TempDir()
 	kimiHome := t.TempDir()
 	path := kimiInstructionsPath(workspace)
@@ -985,6 +1001,7 @@ func TestGetAgentHooksPreservesUserInstructions(t *testing.T) {
 }
 
 func TestGetAgentHooksRewritesManagedInstructions(t *testing.T) {
+	isolateKimiHookSources(t)
 	workspace := t.TempDir()
 	kimiHome := t.TempDir()
 	path := kimiInstructionsPath(workspace)
@@ -1014,6 +1031,7 @@ func TestGetAgentHooksRewritesManagedInstructions(t *testing.T) {
 }
 
 func TestGetAgentHooksRewritesManagedBlockAndPreservesSurroundingUserInstructions(t *testing.T) {
+	isolateKimiHookSources(t)
 	workspace := t.TempDir()
 	kimiHome := t.TempDir()
 	path := kimiInstructionsPath(workspace)
