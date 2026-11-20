@@ -83,6 +83,15 @@ func scanAdmission(row interface{ Scan(...any) error }) (domain.SessionAdmission
 	return rec, nil
 }
 
+// GetSessionAdmission looks up the immutable command by its indexed identity.
+func (s *Store) GetSessionAdmission(ctx context.Context, id string) (domain.SessionAdmissionRequest, bool, error) {
+	rec, err := scanAdmission(s.readDB.QueryRowContext(ctx, "SELECT "+admissionColumns+" FROM session_admission_queue WHERE id=?", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.SessionAdmissionRequest{}, false, nil
+	}
+	return rec, err == nil, err
+}
+
 func (s *Store) ListSessionAdmission(ctx context.Context) ([]domain.SessionAdmissionRequest, error) {
 	rows, err := s.readDB.QueryContext(ctx, "SELECT "+admissionColumns+" FROM session_admission_queue ORDER BY created_at,id")
 	if err != nil {
