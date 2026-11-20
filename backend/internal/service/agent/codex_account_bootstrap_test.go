@@ -24,6 +24,31 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+func TestAccountStoreStorageFailureStageIsPathFree(t *testing.T) {
+	stages := []string{"pending_cleanup", "switch_staging", "catalog_refresh"}
+	for _, stage := range stages {
+		t.Run(stage, func(t *testing.T) {
+			const sensitivePath = "C:\\private\\credential.json"
+			err := accountStoreStorageFailureAt(stage, errors.New(sensitivePath))
+			var failure *codexAccountLocalFailure
+			if !errors.As(err, &failure) {
+				t.Fatalf("missing typed failure: %T", err)
+			}
+			if failure.operation != stage || failure.reason != "account_storage_unsafe" || failure.retryable {
+				t.Fatalf("unexpected path-free diagnostic: %#v", failure)
+			}
+			if strings.Contains(failure.Error(), sensitivePath) || strings.Contains(failure.operation, "\\") {
+				t.Fatal("filesystem path appeared in public error or operation")
+			}
+		})
+	}
+	unexpected := accountStoreStorageFailureAt(`C:\\private\\auth.json`, errors.New(`secret token at C:\\private\\auth.json`))
+	var failure *codexAccountLocalFailure
+	if !errors.As(unexpected, &failure) || failure.operation != "unspecified" || failure.Error() != "account_storage_unsafe" {
+		t.Fatalf("unsafe operation failed closed: %#v", unexpected)
+	}
+}
+
 func TestCodexAccountStoreAndDeviceReconciliationNeverOpenProvider(t *testing.T) {
 	root := t.TempDir()
 	globalHome := filepath.Join(root, "global")
