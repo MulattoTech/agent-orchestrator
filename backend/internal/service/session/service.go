@@ -1961,6 +1961,11 @@ func mapSessionError(err error) error {
 	var relaunchErr *sessionmanager.RelaunchError
 	var cleanupRefused *sessionmanager.CleanupRefusedError
 	var queued *sessionmanager.SessionQueuedError
+	var admissionState *sessionmanager.SessionAdmissionStateError
+	if errors.As(err, &admissionState) {
+		return apierr.Conflict("SESSION_ADMISSION_NOT_RUNNABLE", "This durable command cannot be replayed from its current state; inspect the queue record before making a new request",
+			map[string]any{"admissionRequestId": admissionState.RequestID, "state": admissionState.State})
+	}
 	if errors.As(err, &queued) {
 		return apierr.Conflict("SESSION_CAPACITY_QUEUED", "This command is safely queued until capacity and dependencies permit",
 			map[string]any{"admissionRequestId": queued.RequestID})

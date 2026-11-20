@@ -1085,6 +1085,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
 	if cfg.ClientRequestID != "" {
+		releaseRequest, requestErr := m.beginSpawnRequest(ctx, cfg)
+		if releaseRequest != nil {
+			defer releaseRequest()
+		}
+		// A concurrent request may have committed while its entry gate is
+		// still held. Replay that receipt before reporting an in-flight key.
 		existing, found, err := m.store.GetSessionByClientRequestID(ctx, cfg.ClientRequestID)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, err
@@ -1092,6 +1098,25 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		if found {
 			rec, err := replayClientRequest(existing, cfg.ClientRequestHash)
 			return rec, 0, 0, err
+		}
+		if requestErr != nil {
+			return domain.SessionRecord{}, 0, 0, requestErr
+		}
+		if err := m.existingSpawnAdmission(ctx, cfg); err != nil {
+			var terminal *SessionAdmissionStateError
+			if errors.As(err, &terminal) {
+				// Dispatch may have committed after the first receipt read but
+				// before the queue lookup observed its terminal state.
+				existing, found, lookupErr := m.store.GetSessionByClientRequestID(ctx, cfg.ClientRequestID)
+				if lookupErr != nil {
+					return domain.SessionRecord{}, 0, 0, lookupErr
+				}
+				if found {
+					rec, replayErr := replayClientRequest(existing, cfg.ClientRequestHash)
+					return rec, 0, 0, replayErr
+				}
+			}
+			return domain.SessionRecord{}, 0, 0, err
 		}
 	}
 	project, err := m.loadProject(ctx, cfg.ProjectID)

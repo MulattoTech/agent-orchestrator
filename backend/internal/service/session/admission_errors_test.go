@@ -21,3 +21,17 @@ func TestAdmissionErrorsPreserveDurableQueueIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestAdmissionTerminalErrorsPreserveDurableState(t *testing.T) {
+	for _, state := range []string{"cancelled", "blocked", "completed"} {
+		t.Run(state, func(t *testing.T) {
+			mapped := toSpawnAPIError(&sessionmanager.SessionAdmissionStateError{RequestID: "admit-terminal-id", State: state})
+			var response *apierr.Error
+			if !errors.As(mapped, &response) || response.Kind != apierr.KindConflict ||
+				response.Code != "SESSION_ADMISSION_NOT_RUNNABLE" ||
+				response.Details["admissionRequestId"] != "admit-terminal-id" || response.Details["state"] != state {
+				t.Fatalf("terminal command lost its durable identity/state: %+v", mapped)
+			}
+		})
+	}
+}

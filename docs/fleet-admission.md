@@ -46,6 +46,28 @@ queueing is enabled. Commands use immutable payloads and stable client request
 keys. Duplicate keys do not create duplicate queue commands. Commands without a
 caller key receive a stable key before eventual execution.
 
+A retry with the same client key and project remains attached to that immutable
+command even if worker capacity grows or queue dispatch is disabled. Pending and
+running commands retain their queue identity; cancelled or blocked commands are
+not revived. A completed command requires its committed session receipt before it
+can replay. Otherwise the API returns SESSION_ADMISSION_NOT_RUNNABLE with the
+admission request ID and durable state. Before a committed session receipt is
+available, this durable admission lookup compares the full normalized payload,
+even when an internal caller supplies an empty or reused request hash. Only the
+existing queue delivery hints (Async and TaskPreparation) are normalized away.
+Receipt-first replay retains the existing client-request-hash contract.
+
+Concurrent direct requests using one client key cannot create a second cancellable
+command while the first is still preparing its session seed. They replay an
+available committed receipt or report that the request remains in flight.
+Unrelated keys remain concurrent, and a claimed dispatcher can complete during
+the enqueue response window. A new client key represents explicit fresh intent.
+
+This guard preserves the existing admission ID format, which includes the project
+ID. Legacy reuse of one client key across different projects before a session
+receipt exists remains a separate identity gap; this change adds no queue-history
+scan or schema migration.
+
 The queue admits at most 1,024 pending/running commands. Transactional SQLite
 claims rotate projects by latest durable claim time and preserve FIFO within a
 project. Each claim advances a generation and records its exclusive daemon owner.
