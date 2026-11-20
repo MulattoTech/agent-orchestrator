@@ -155,12 +155,24 @@ func ShareCredentials(dataDir string) error {
 	return seedKimiCredentials(kimiCodeHomeDir(dataDir))
 }
 
+type kimiCredentialStoreOps struct {
+	rename  func(string, string) error
+	symlink func(string, string) error
+}
+
 func seedKimiCredentials(targetHome string) error {
+	return seedKimiCredentialsWithOps(targetHome, kimiCredentialStoreOps{
+		rename:  os.Rename,
+		symlink: os.Symlink,
+	})
+}
+
+func seedKimiCredentialsWithOps(targetHome string, ops kimiCredentialStoreOps) error {
 	sourceHome, ok := kimiCodeHome()
 	if !ok {
 		return nil
 	}
-	if shared, err := shareKimiCredentialStore(sourceHome, targetHome); err != nil || shared {
+	if shared, err := shareKimiCredentialStore(sourceHome, targetHome, ops); err != nil || shared {
 		return err
 	}
 	sourceConfigPath := filepath.Join(sourceHome, "config.toml")
@@ -186,32 +198,52 @@ func seedKimiCredentials(targetHome string) error {
 // own: Kimi rotates its refresh token, so a copy goes stale and two copies can
 // sign each other out. It reports false where the user has no Kimi login or a
 // link cannot be made (Windows without the privilege), leaving the copy below.
-func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
+func shareKimiCredentialStore(sourceHome, targetHome string, ops kimiCredentialStoreOps) (bool, error) {
 	source := filepath.Join(sourceHome, "credentials")
 	target := filepath.Join(targetHome, "credentials")
 	if sameKimiConfigPath(source, target) {
 		return true, nil
 	}
+	link, linkErr := os.Readlink(target)
+	alreadyShared := linkErr == nil && sameKimiConfigPath(link, source)
+	aside := target + ".seeded"
+	if !alreadyShared {
+		// A saved store may be the only copy left after a failed restoration.
+		// Legacy sidecars also require reconciliation; never delete them to retry.
+		// Check before source eligibility can choose the copy fallback.
+		if _, err := os.Lstat(aside); err == nil {
+			return false, errors.New("Orchestrator Kimi credential recovery is pending; reconcile the retained store before retrying")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, errors.New("Orchestrator Kimi credential recovery could not be checked; inspect the retained store before retrying")
+		}
+	}
 	if status, ok, err := kimiCredentialsAuthStatus(filepath.Join(source, "kimi-code.json")); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
 		return false, nil //nolint:nilerr // No usable login to share; the seeded copy stays.
 	}
-	if link, err := os.Readlink(target); err == nil && sameKimiConfigPath(link, source) {
+	if alreadyShared {
 		return true, nil
 	}
 	if err := os.MkdirAll(targetHome, 0o700); err != nil {
 		return false, fmt.Errorf("create Orchestrator Kimi home: %w", err)
 	}
 	// AO's folder only held seeded copies; it is restored if the link fails.
-	aside := target + ".seeded"
-	_ = os.RemoveAll(aside)
-	if err := os.Rename(target, aside); err != nil && !errors.Is(err, os.ErrNotExist) {
+	moved := false
+	if err := ops.rename(target, aside); err == nil {
+		moved = true
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return false, fmt.Errorf("set aside Orchestrator's Kimi credentials: %w", err)
 	}
-	if err := os.Symlink(source, target); err != nil {
-		_ = os.Rename(aside, target)
-		return false, nil //nolint:nilerr // No link (e.g. Windows without the privilege); the copy is restored.
+	if err := ops.symlink(source, target); err != nil {
+		if moved {
+			if restoreErr := ops.rename(aside, target); restoreErr != nil {
+				return false, fmt.Errorf("restore Orchestrator's Kimi credentials after failed link: %w", restoreErr)
+			}
+		}
+		return false, nil //nolint:nilerr // No link; any moved store is restored before copy fallback.
 	}
-	_ = os.RemoveAll(aside)
+	if moved {
+		_ = os.RemoveAll(aside)
+	}
 	return true, nil
 }
 
