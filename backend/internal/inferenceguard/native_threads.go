@@ -58,6 +58,28 @@ func (g *Gate) verifyNativeThread(ctx context.Context, p Policy, session, thread
 	}
 	return nil
 }
+
+// VerifyNativeRecovery authorizes observation of an existing unsettled turn,
+// never a new dispatch. A historical registry entry alone does not prove that
+// this host owns the active or uncertain attempt on the native thread.
+func (g *Gate) VerifyNativeRecovery(ctx context.Context, session, thread string) error {
+	p, err := g.current()
+	if err != nil {
+		return err
+	}
+	if err := g.verifyNativeThread(ctx, p, session, thread); err != nil {
+		return err
+	}
+	var bound bool
+	if err := g.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM attempts a JOIN native_attempt_threads n ON n.attempt_id=a.id WHERE a.session_id=? AND n.thread_id=? AND a.account_key=? AND n.account_key=? AND a.dispatched_at<>'' AND a.provider_turn_id<>'' AND a.state IN ('active','uncertain'))", session, thread, p.AccountKey, p.AccountKey).Scan(&bound); err != nil {
+		return err
+	}
+	if !bound {
+		return deny(ErrUncertain, "native recovery requires this host's exact bound unsettled turn")
+	}
+	return nil
+}
+
 func (g *Gate) NativeThreads(ctx context.Context) ([]NativeThreadBinding, error) {
 	p, err := g.current()
 	if err != nil {

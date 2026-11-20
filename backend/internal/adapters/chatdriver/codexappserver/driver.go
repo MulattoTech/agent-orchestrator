@@ -301,7 +301,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false, false,
 	)
 	if err != nil {
 		return nil, err
@@ -380,7 +380,11 @@ func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (por
 // Resume reattaches to a stored Codex thread after a daemon or app-server
 // restart. A thread that is still running is rejoined rather than restarted.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
-	guard, selection, guardErr := prepareDispatchGuard(cfg.DataDir, string(cfg.SessionID), cfg.PolicyRole, cfg.Model, cfg.Effort, cfg.ReadOnly)
+	recoveryThread := ""
+	if cfg.ReconnectOnly {
+		recoveryThread = cfg.ProviderConversationID
+	}
+	guard, selection, observationOnly, guardErr := prepareDispatchGuardForRecovery(cfg.DataDir, string(cfg.SessionID), cfg.PolicyRole, cfg.Model, cfg.Effort, cfg.ReadOnly, recoveryThread)
 	if guardErr != nil {
 		return nil, guardErr
 	}
@@ -400,7 +404,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, cfg.ReconnectOnly,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, cfg.ReconnectOnly, observationOnly,
 	)
 	if err != nil {
 		return nil, err
@@ -593,8 +597,11 @@ func (d *Driver) connectSession(
 	env map[string]string,
 	prepareEnv func(context.Context) (map[string]string, error),
 	providerScopeID string,
-	reconnectOnly bool,
+	reconnectOnly, observationOnly bool,
 ) (*conversation, bool, error) {
+	if observationOnly && !reconnectOnly {
+		return nil, false, ports.ErrChatRecoveryInconclusive
+	}
 	// Injected driver tests intentionally retain the direct pipe launcher. The
 	// shipped driver uses spawnAppServer and therefore the persistent host.
 	if !d.persistent {
@@ -666,6 +673,16 @@ func (d *Driver) connectSession(
 		},
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
+	if observationOnly {
+		// The exact bound lease permits observing an already initialized host
+		// despite occupied capacity. Do not initialize or resume a replacement:
+		// account/read and model/list must succeed before the event pump starts.
+		if !transport.Reconnected {
+			_ = conv.Close()
+			return nil, false, ports.ErrChatRecoveryInconclusive
+		}
+		return conv, true, nil
+	}
 	if transport.Reconnected {
 		// A daemon stopped mid-initialize leaves a host whose app-server never
 		// was, failing every call "Not initialized". An initialized one refuses
@@ -876,7 +893,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	if !filepath.IsAbs(cfg.WorkspacePath) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
 	}
-	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false)
+	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false, false)
 	if err != nil {
 		return nil, err
 	}
