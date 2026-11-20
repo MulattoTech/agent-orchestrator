@@ -110,7 +110,7 @@ func candidateConfig(t *testing.T) candidateFixtureConfig {
 		t.Fatal("fixed candidate/helper filenames in one bundle required")
 	}
 	bundle := filepath.Dir(c.Executable)
-	if !strings.HasPrefix(strings.ToLower(bundle), `c:\aodev\releases\ao-unofficial-`) {
+	if !strings.HasPrefix(strings.ToLower(bundle), `c:\ao-mtechlabs-releases-20261116\ao-unofficial-`) {
 		t.Fatal("candidate must be in the isolated release root")
 	}
 	var manifest struct {

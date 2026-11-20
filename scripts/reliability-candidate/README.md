@@ -67,7 +67,7 @@ The recipe:
    selector, complete explicit fake external effects, strict policy and the
    exact source commit linked into the executable.
 7. Verifies that all five executables are unsigned and writes a **new**
-   C:\AODev\releases\ao-unofficial-UTC-commit12 directory,
+   C:\AO-MTechLabs-Releases-20261116\ao-unofficial-UTC-commit12 directory,
    per-file hashes, and a manifest/digest. It leaves failed artifacts intact for
    inspection and never overwrites an earlier release.
 

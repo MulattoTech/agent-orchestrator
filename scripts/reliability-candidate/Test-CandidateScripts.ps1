@@ -19,6 +19,20 @@ foreach ($file in Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File
         }
     }
 }
+$commonText = $sources['Candidate.Common.ps1']
+if (-not $commonText.Contains('function Initialize-CandidateReleaseRoot') -or
+    -not $commonText.Contains('SetAccessRuleProtection') -or
+    -not $commonText.Contains('Assert-CandidateACLAncestors $root') -or
+    -not $commonText.Contains('C:\AO-MTechLabs-Releases-20261116') -or
+    $commonText.Contains('C:\AODev\releases')) {
+    throw 'Candidate release root must be protected, verified and independent of AODev.'
+}
+if (-not $sources['Build-Candidate.ps1'].Contains('''Test-CandidateACLDiagnostics.ps1''')) {
+    throw 'Release build must package the synthetic ACL behavioral tests.'
+}
+if (-not $sources['Build-Candidate.ps1'].Contains('$releaseParent = Initialize-CandidateReleaseRoot')) {
+    throw 'Build must initialize the private release root before compilation.'
+}
 $build = $asts['Build-Candidate.ps1']
 $goCalls = @($build.FindAll({
     param($n)
@@ -137,6 +151,11 @@ $start = $asts['Start-PostRefresh-Validation.ps1']
 $starts = @($start.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start-Process' }, $true))
 if ($starts.Count -ne 1) { throw 'Post-refresh startup must launch exactly one candidate process.' }
 $startText = $sources['Start-PostRefresh-Validation.ps1']
+$releaseGuard = $startText.IndexOf('Assert-CandidateACLAncestors $bundle.Root')
+$bundleGuard = $startText.IndexOf('$bundle = Assert-CandidateBundle $PSScriptRoot')
+if ($releaseGuard -le $bundleGuard -or $releaseGuard -ge $starts[0].Extent.StartOffset) {
+    throw 'Verified release ancestry must be checked after bundle identity and before process launch.'
+}
 foreach ($guard in @('if (-not $AuthorizePostRefreshValidation)', '2026-11-21T12:30:00Z', 'Assert-CandidateBundle', 'Assert-CandidateOwnerPolicy', 'Assert-CandidateACLAncestors', 'Initialize-CandidatePrivateRoot', 'New-Item -ItemType Directory')) {
     $at = $startText.IndexOf($guard)
     if ($at -lt 0 -or $at -gt $starts[0].Extent.StartOffset) { throw "Missing pre-launch gate: $guard" }
@@ -197,6 +216,10 @@ foreach ($required in @('processStartTicksUtc', 'executableSHA256', 'Get-NetTCPC
     'ao-offline-daemon.exe', 'Run-Offline-Daemon.ps1', 'offlineDaemon.allowlistEnforced', 'offlineDaemon.sourcePinned', 'manifest.unsigned')) {
     if (-not $commonText.Contains($required)) { throw "Missing ownership/hash validation: $required" }
 }
+foreach ($category in @('AO_ACL_OWNER_OR_DACL_UNVERIFIED', 'AO_ACL_UNSUPPORTED_ALLOW_ACE',
+    'AO_ACL_UNTRUSTED_PRIVATE_ALLOW', 'AO_ACL_UNTRUSTED_ANCESTOR_MUTATION_ALLOW')) {
+    if (-not $commonText.Contains($category)) { throw "Missing fail-closed ACL diagnostic category: $category" }
+}
 if ($commonText -match '\.SetOwner\(' -or $commonText -match '\.SetAudit' -or $commonText -match 'RunAs') {
     throw 'Candidate must not change owner/SACL or elevate.'
 }
@@ -204,8 +227,8 @@ $aclWrites = @($asts['Candidate.Common.ps1'].FindAll({
     param($n)
     $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Set-Acl'
 }, $true))
-if ($aclWrites.Count -ne 1 -or $aclWrites[0].Extent.Text -notmatch '-LiteralPath \$root -AclObject \$acl') {
-    throw 'Only the freshly created candidate root DACL may be modified.'
+if ($aclWrites.Count -ne 2 -or @($aclWrites | Where-Object { $_.Extent.Text -notmatch '-LiteralPath \$root -AclObject \$acl' }).Count -ne 0) {
+    throw 'Only the newly created release and candidate private-root DACLs may be modified.'
 }
 $policy = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'policy.template.json') -Raw | ConvertFrom-Json -AsHashtable
 if ($policy.native_account_sha256 -ne '' -or -not $policy.emergency_stop -or -not $policy.pause -or
@@ -222,5 +245,6 @@ foreach ($role in @('orchestrator', 'implementation', 'complex', 'reviewer', 'li
         if ($model -match '(?i)luna') { throw 'Template prematurely permits Luna.' }
     }
 }
-Write-Output "PASS: parsed $($asts.Count) PowerShell scripts; build is compile-only, fleet/ConPTY/daemon arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
-Write-Output 'Scope: AST/static validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'
+& (Join-Path $PSScriptRoot 'Test-CandidateACLDiagnostics.ps1')
+Write-Output "PASS: parsed $($asts.Count) PowerShell scripts and verified synthetic ACL decisions; build is compile-only, fleet/ConPTY/daemon arguments and fixture inputs are fixed, startup gates, default-off allowance opt-in and owned stop checks are present, template is structurally valid."
+Write-Output 'Scope: AST/static and in-memory synthetic descriptor validation only. No candidate executable, daemon, native account endpoint or model provider was invoked.'

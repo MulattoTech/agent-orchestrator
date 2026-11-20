@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/testenv"
 )
@@ -30,6 +31,17 @@ func TestMain(m *testing.M) {
 			}
 		}
 		runtime.GOMAXPROCS(2)
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			started := time.Now()
+			for range ticker.C {
+				var stats runtime.MemStats
+				runtime.ReadMemStats(&stats)
+				fmt.Fprintf(os.Stderr, "OFFLINE_FLEET_HEARTBEAT elapsed_seconds=%d goroutines=%d heap_bytes=%d sys_bytes=%d gc_cycles=%d\n",
+					int(time.Since(started).Seconds()), runtime.NumGoroutine(), stats.HeapAlloc, stats.Sys, stats.NumGC)
+			}
+		}()
 	}
 	os.Exit(m.Run())
 }

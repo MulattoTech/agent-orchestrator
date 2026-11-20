@@ -21,6 +21,9 @@ if ((Get-FileHash -LiteralPath $common -Algorithm SHA256).Hash.ToLowerInvariant(
 }
 . $common
 $bundle = Assert-CandidateBundle $PSScriptRoot
+# File hashes alone cannot protect against replacement in a writable parent
+# between verification and CreateProcess. Refuse an unsafe release ancestry.
+Assert-CandidateACLAncestors $bundle.Root
 $owner = Assert-CandidateOwnerPolicy $OwnerPolicyPath $VerifiedNativeAccountSHA256
 $nativeRoot = Get-CandidateLocalPath $NativeHome
 if (-not (Test-Path -LiteralPath $nativeRoot -PathType Container)) { throw 'The explicitly selected native account home must already exist.' }
