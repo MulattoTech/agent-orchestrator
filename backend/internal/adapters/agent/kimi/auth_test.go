@@ -6,31 +6,47 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestKimiLocalAuthStatusAuthorizedWithEnvKey(t *testing.T) {
+	clearKimiAuthEnv(t)
+	t.Setenv("KIMI_SHARE_DIR", t.TempDir())
+	t.Setenv("KIMI_CODE_HOME", t.TempDir())
 	t.Setenv("KIMI_API_KEY", "kimi-key")
 
-	status, ok, err := kimiLocalAuthStatus(context.Background())
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	status, ok, err := kimiLocalAuthStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok || status != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	}
+	want := domain.EnvironmentSource("KIMI_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey)
+	if got := evidence.Identity(); got != want {
+		t.Fatalf("credential source = %+v, want %+v", got, want)
 	}
 }
 
 func TestKimiLocalAuthStatusAuthorizedWithOpenAIEnvKey(t *testing.T) {
 	clearKimiAuthEnv(t)
+	t.Setenv("KIMI_SHARE_DIR", t.TempDir())
+	t.Setenv("KIMI_CODE_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "openai-key")
 
-	status, ok, err := kimiLocalAuthStatus(context.Background())
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	status, ok, err := kimiLocalAuthStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok || status != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	}
+	want := domain.EnvironmentSource("OPENAI_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey)
+	if got := evidence.Identity(); got != want {
+		t.Fatalf("credential source = %+v, want %+v", got, want)
 	}
 }
 
