@@ -2,9 +2,9 @@
   "schema": "ao-offline-windows-selection-v1",
   "go_version": "1.27.4",
   "expected_total": {
-    "top": 59,
+    "top": 61,
     "nested": 133,
-    "leaf": 167
+    "leaf": 169
   },
   "runs": [
     {
@@ -254,10 +254,10 @@
       "package_ids": [
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
       ],
-      "regex": "^(TestAdmissionCancelledSpawnRetryKeepsCommandTerminal|TestAdmissionClientRequestKeyIsGlobalBeforeReceipt|TestAdmissionConcurrentSpawnRetryDoesNotCreateCancellableCommand|TestAdmissionCrossManagerClientKeyIsAtomicAcrossQueuedProjects|TestAdmissionCrossManagerQueuedAndSeededKeyCannotCoexist|TestAdmissionCrossManagerSameProjectHashConflictIsTyped|TestAdmissionCrossProjectInFlightKeyDoesNotDefer|TestAdmissionDispatchRacesReplayCommittedReceipt|TestAdmissionGeneratedQueueKeyRemainsInternal|TestAdmissionRestoreRecoveryRequiresCompletionProof|TestAdmissionSpawnRequestGatePreservesReceiptsAndRelease|TestAdmissionSpawnRetryHonorsDurableStates)$",
-      "expected_top": 12,
+      "regex": "^(TestAdmissionCancelledSpawnRetryKeepsCommandTerminal|TestAdmissionClientRequestKeyIsGlobalBeforeReceipt|TestAdmissionConcurrentSpawnRetryDoesNotCreateCancellableCommand|TestAdmissionCrossManagerClientKeyIsAtomicAcrossQueuedProjects|TestAdmissionCrossManagerMatchingDispatcherOwnsSeed|TestAdmissionCrossManagerQueuedAndSeededKeyCannotCoexist|TestAdmissionCrossManagerSameProjectHashConflictIsTyped|TestAdmissionCrossProjectInFlightKeyDoesNotDefer|TestAdmissionDispatchRacesReplayCommittedReceipt|TestAdmissionGeneratedQueueKeyRemainsInternal|TestAdmissionRestoreRecoveryRequiresCompletionProof|TestAdmissionSpawnRequestGatePreservesReceiptsAndRelease|TestAdmissionSpawnRetryHonorsDurableStates)$",
+      "expected_top": 13,
       "expected_nested": 31,
-      "expected_leaf": 33,
+      "expected_leaf": 34,
       "test_ids": [
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCancelledSpawnRetryKeepsCommandTerminal",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCancelledSpawnRetryKeepsCommandTerminal/reopened_sqlite",
@@ -271,6 +271,7 @@
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionClientRequestKeyIsGlobalBeforeReceipt/queued_reopened_disabled",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionConcurrentSpawnRetryDoesNotCreateCancellableCommand",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerClientKeyIsAtomicAcrossQueuedProjects",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerMatchingDispatcherOwnsSeed",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerQueuedAndSeededKeyCannotCoexist",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerQueuedAndSeededKeyCannotCoexist/queued_claim_wins_before_seed",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerQueuedAndSeededKeyCannotCoexist/session_seed_wins_before_queue_insert",
@@ -302,6 +303,22 @@
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionSpawnRetryHonorsDurableStates/completed",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionSpawnRetryHonorsDurableStates/queued",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionSpawnRetryHonorsDurableStates/running"
+      ]
+    },
+    {
+      "name": "sqlite-seed-fence-migration",
+      "packages": [
+        "./internal/storage/sqlite"
+      ],
+      "package_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+      ],
+      "regex": "^(TestAdmissionSeedFenceMigrationPreservesLegacyAndRollsBack)$",
+      "expected_top": 1,
+      "expected_nested": 0,
+      "expected_leaf": 1,
+      "test_ids": [
+        "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite::TestAdmissionSeedFenceMigrationPreservesLegacyAndRollsBack"
       ]
     }
   ]
