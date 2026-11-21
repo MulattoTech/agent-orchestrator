@@ -203,7 +203,7 @@ try {
     if ([IO.File]::ReadAllText((Join-Path $Repo 'backend/go.mod')) -notmatch '(?m)^go 1\.27\.4\r?$') { throw 'go.mod must retain the reviewed Go 1.27.4 directive' }
     $selection = Get-Content -Raw -LiteralPath $SelectionPath | ConvertFrom-Json -AsHashtable
     $SelectionSHA256 = (Get-FileHash -LiteralPath $SelectionPath).Hash
-    if ($selection.schema -cne 'ao-offline-windows-selection-v1' -or $selection.go_version -cne '1.27.4' -or $selection.runs.Count -ne 7 -or $selection.expected_total.top -ne 57 -or $selection.expected_total.nested -ne 129 -or $selection.expected_total.leaf -ne 163) { throw 'Unexpected finite selection totals' }
+    if ($selection.schema -cne 'ao-offline-windows-selection-v1' -or $selection.go_version -cne '1.27.4' -or $selection.runs.Count -ne 7 -or $selection.expected_total.top -ne 59 -or $selection.expected_total.nested -ne 133 -or $selection.expected_total.leaf -ne 167) { throw 'Unexpected finite selection totals' }
     $safeTop = @(
         'TestAdmissionNativeWorkerSnapshotSelection',
         'TestInferenceGuardChildCompletionCannotReleaseRootLease',
@@ -261,7 +261,9 @@ try {
         'TestAdmissionRestoreRecoveryRequiresCompletionProof',
         'TestAdmissionConcurrentSpawnRetryDoesNotCreateCancellableCommand',
         'TestAdmissionCancelledSpawnRetryKeepsCommandTerminal',
-        'TestAdmissionCrossManagerClientKeyIsAtomicAcrossQueuedProjects'
+        'TestAdmissionCrossManagerClientKeyIsAtomicAcrossQueuedProjects',
+        'TestAdmissionCrossManagerSameProjectHashConflictIsTyped',
+        'TestAdmissionCrossManagerQueuedAndSeededKeyCannotCoexist'
     )
     $selectedTop = @()
     $expectedPackages = @('./internal/adapters/agent/kimi','./internal/adapters/chatdriver/codexappserver','./internal/session_manager','./internal/procmem','./internal/nativereceipts','./internal/fleetpressure','./internal/session_manager')
@@ -321,8 +323,8 @@ try {
     $result = [ordered]@{
         schema='ao-offline-windows-source-validation-v1'; result=if($pass){'PASS'}else{'FAIL'}; expected_head=$ExpectedHead; repository=$Repo; evidence=$RunRoot; fixture_root=$StateRoot;
         started_utc=$Started; finished_utc=[DateTime]::UtcNow.ToString('o'); selection_sha256=$SelectionSHA256; runner_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash;
-        expected_coverage=[ordered]@{top=57;nested=129;leaf=163}; dependency_bootstrap_enabled=[bool]$DownloadModules; phases=@($Phases.ToArray()); failures=@($Failures.ToArray());
-        scope='Finite synthetic source tests only: Kimi file copy/retry, in-memory bound-turn reconnect, pure process/worker metrics, injected Windows fleet handle-identity checks, and receipt recovery/expiry in temporary files with memory sinks, and synthetic admission/restore recovery including separate Managers with fake runtimes and temporary SQLite. No native worker fixture, AO, ConPTY, daemon, provider/authentication or real-profile qualification.'
+        expected_coverage=[ordered]@{top=59;nested=133;leaf=167}; dependency_bootstrap_enabled=[bool]$DownloadModules; phases=@($Phases.ToArray()); failures=@($Failures.ToArray());
+        scope='Finite synthetic source tests only: Kimi file copy/retry, in-memory bound-turn reconnect, pure process/worker metrics, injected Windows fleet handle-identity checks, and receipt recovery/expiry in temporary files with memory sinks, and synthetic admission/restore recovery including separate Managers, queue-vs-seed fencing, and temporary SQLite/fake runtimes. No native worker fixture, AO, ConPTY, daemon, provider/authentication or real-profile qualification.'
     }
     Write-Json (Join-Path $RunRoot 'result.json') $result
     [Console]::WriteLine((ConvertTo-Json -InputObject ([ordered]@{result=$result.result; expected_head=$ExpectedHead; evidence=$RunRoot; phases=$Phases.Count; failures=@($Failures.ToArray())}) -Depth 4))

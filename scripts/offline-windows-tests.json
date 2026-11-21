@@ -2,9 +2,9 @@
   "schema": "ao-offline-windows-selection-v1",
   "go_version": "1.27.4",
   "expected_total": {
-    "top": 57,
-    "nested": 129,
-    "leaf": 163
+    "top": 59,
+    "nested": 133,
+    "leaf": 167
   },
   "runs": [
     {
@@ -254,10 +254,10 @@
       "package_ids": [
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
       ],
-      "regex": "^(TestAdmissionCancelledSpawnRetryKeepsCommandTerminal|TestAdmissionClientRequestKeyIsGlobalBeforeReceipt|TestAdmissionConcurrentSpawnRetryDoesNotCreateCancellableCommand|TestAdmissionCrossManagerClientKeyIsAtomicAcrossQueuedProjects|TestAdmissionCrossProjectInFlightKeyDoesNotDefer|TestAdmissionDispatchRacesReplayCommittedReceipt|TestAdmissionGeneratedQueueKeyRemainsInternal|TestAdmissionRestoreRecoveryRequiresCompletionProof|TestAdmissionSpawnRequestGatePreservesReceiptsAndRelease|TestAdmissionSpawnRetryHonorsDurableStates)$",
-      "expected_top": 10,
-      "expected_nested": 27,
-      "expected_leaf": 29,
+      "regex": "^(TestAdmissionCancelledSpawnRetryKeepsCommandTerminal|TestAdmissionClientRequestKeyIsGlobalBeforeReceipt|TestAdmissionConcurrentSpawnRetryDoesNotCreateCancellableCommand|TestAdmissionCrossManagerClientKeyIsAtomicAcrossQueuedProjects|TestAdmissionCrossManagerQueuedAndSeededKeyCannotCoexist|TestAdmissionCrossManagerSameProjectHashConflictIsTyped|TestAdmissionCrossProjectInFlightKeyDoesNotDefer|TestAdmissionDispatchRacesReplayCommittedReceipt|TestAdmissionGeneratedQueueKeyRemainsInternal|TestAdmissionRestoreRecoveryRequiresCompletionProof|TestAdmissionSpawnRequestGatePreservesReceiptsAndRelease|TestAdmissionSpawnRetryHonorsDurableStates)$",
+      "expected_top": 12,
+      "expected_nested": 31,
+      "expected_leaf": 33,
       "test_ids": [
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCancelledSpawnRetryKeepsCommandTerminal",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCancelledSpawnRetryKeepsCommandTerminal/reopened_sqlite",
@@ -271,6 +271,12 @@
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionClientRequestKeyIsGlobalBeforeReceipt/queued_reopened_disabled",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionConcurrentSpawnRetryDoesNotCreateCancellableCommand",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerClientKeyIsAtomicAcrossQueuedProjects",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerQueuedAndSeededKeyCannotCoexist",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerQueuedAndSeededKeyCannotCoexist/queued_claim_wins_before_seed",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerQueuedAndSeededKeyCannotCoexist/session_seed_wins_before_queue_insert",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerSameProjectHashConflictIsTyped",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerSameProjectHashConflictIsTyped/different_hash_must_conflict",
+        "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossManagerSameProjectHashConflictIsTyped/identical_payload_is_idempotent",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossProjectInFlightKeyDoesNotDefer",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossProjectInFlightKeyDoesNotDefer/changed_hash_conflicts",
         "github.com/aoagents/agent-orchestrator/backend/internal/session_manager::TestAdmissionCrossProjectInFlightKeyDoesNotDefer/reused_hash_stays_incomplete",
