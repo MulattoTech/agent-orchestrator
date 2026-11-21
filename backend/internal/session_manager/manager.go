@@ -31,6 +31,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
+	storeadmission "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 	"github.com/aoagents/agent-orchestrator/backend/internal/termtheme"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
@@ -1354,6 +1355,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			rec, err = m.store.CreateSession(ctx, seed)
 		}
 		if err != nil {
+			if errors.Is(err, storeadmission.ErrAdmissionClientKeyConflict) {
+				return domain.SessionRecord{}, 0, 0, ErrClientRequestConflict
+			}
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStageEarly(ErrSpawnCreate, err)
 		}
 	}
