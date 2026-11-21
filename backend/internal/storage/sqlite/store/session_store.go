@@ -136,6 +136,13 @@ func (s *Store) createSessionLocked(ctx context.Context, q *gen.Queries, rec dom
 	}
 	if err := q.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
 		if rec.ClientRequestID != "" {
+			// The SQLite trigger is evaluated with the same database writer
+			// as InsertSession. A competing Manager may have enqueued this
+			// key after our initial receipt read. Never turn its seed into
+			// a second launch or retry it without durable reconciliation.
+			if strings.Contains(err.Error(), admissionKeySeedTriggerMessage) {
+				return domain.SessionRecord{}, false, ErrAdmissionClientKeyConflict
+			}
 			existing, found, reloadErr := s.getSessionByClientRequestID(ctx, q, rec.ClientRequestID)
 			if reloadErr == nil && found {
 				return existing, false, nil
