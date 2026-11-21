@@ -93,7 +93,7 @@ func (s *Store) EnqueueSessionAdmission(ctx context.Context, rec domain.SessionA
 		return err
 	}
 	if project != string(rec.ProjectID) || operation != rec.Operation || payload != rec.Payload {
-		return errors.New("admission request ID conflict")
+		return fmt.Errorf("%w: admission request ID conflict", ErrAdmissionClientKeyConflict)
 	}
 	return nil
 }
