@@ -82,11 +82,20 @@ def checks(sha):
     required = [r for r in runs if r.get("name") in REQUIRED_GREEN_CHECKS]
     green = {r.get("name") for r in required
              if r.get("status") == "completed" and r.get("conclusion") == "success"}
-    required_clean = all(r.get("status") == "completed"
-                         and r.get("conclusion") == "success" for r in required)
-    complete = response.get("total_count", len(runs)) == len(runs)
-    # Fail closed if check-runs are paginated or any named safety check is
-    # absent/neutral/skipped, even when optional application jobs were skipped.
+    required_clean = (
+        len(required) == len(REQUIRED_GREEN_CHECKS)
+        and all(r.get("status") == "completed"
+                and r.get("conclusion") == "success"
+                and isinstance(r.get("app"), dict)
+                and r["app"].get("slug") == "github-actions"
+                for r in required)
+    )
+    complete = isinstance(response.get("total_count"), int) and (
+        response["total_count"] == len(runs)
+    )
+    # Refuse missing, duplicate or third-party check names, not just skips:
+    # GitHub Actions itself must have reported each required green job.
+    # Missing total_count or incomplete pagination also fails closed.
     return (not failed and not pending and complete and required_clean
             and REQUIRED_GREEN_CHECKS.issubset(green)), failed
 
@@ -176,6 +185,21 @@ def main():
                 not opt_in):
             continue
         try:
+            # The PR head and labels may change between classify() and this
+            # irreversible enrollment. Re-read them just before arming.
+            fresh = get("/pulls/" + str(pr["number"]))
+            fresh_labels = {label["name"] for label in fresh.get("labels", [])}
+            fresh_head = fresh.get("head") or {}
+            fresh_repo = fresh_head.get("repo") or {}
+            if (fresh_head.get("sha") != pr["head"]["sha"] or
+                    fresh.get("draft") or fresh.get("mergeable_state") != "clean" or
+                    (fresh.get("base") or {}).get("ref") != repo["default_branch"] or
+                    (fresh.get("user") or {}).get("login", "").lower() != OWNER or
+                    fresh_repo.get("full_name", "").lower() != REPO.lower() or
+                    "agent:automerge" not in fresh_labels or
+                    "agent:hold" in fresh_labels or fresh.get("auto_merge")):
+                print(f"PR #{pr['number']}: changed before auto-merge enrollment")
+                continue
             result = api("POST", "/graphql", {
                 "query": ("mutation($id:ID!){enablePullRequestAutoMerge("
                           "input:{pullRequestId:$id,mergeMethod:SQUASH})"

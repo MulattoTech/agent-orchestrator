@@ -26,11 +26,13 @@ def load_triage():
 
 
 def success(name):
-    return {"name": name, "status": "completed", "conclusion": "success"}
+    return {"name": name, "status": "completed", "conclusion": "success",
+            "app": {"slug": "github-actions"}}
 
 
 def completed(name, conclusion):
-    return {"name": name, "status": "completed", "conclusion": conclusion}
+    return {"name": name, "status": "completed", "conclusion": conclusion,
+            "app": {"slug": "github-actions"}}
 
 
 def suite():
@@ -64,12 +66,12 @@ class GuardrailTests(unittest.TestCase):
         self.network.start()
         self.addCleanup(self.network.stop)
 
-    def check_result(self, runs, *, statuses=(), total=None):
+    def check_result(self, runs, *, statuses=(), total=None, omit_total=False):
         def get(path):
             if path.endswith("/check-runs?per_page=100"):
                 response = {"check_runs": runs}
-                if total is not None:
-                    response["total_count"] = total
+                if not omit_total:
+                    response["total_count"] = len(runs) if total is None else total
                 return response
             if path.endswith("/status"):
                 return {"statuses": list(statuses)}
@@ -78,9 +80,10 @@ class GuardrailTests(unittest.TestCase):
             return self.triage.checks("synthetic-commit")
 
     def simulate_main(self, proposal, *, runs=None, age=0,
-                      repo_auto_merge=True):
+                      repo_auto_merge=True, fresh_override=None):
         calls = []
         runs = suite() if runs is None else runs
+        pull_reads = []
 
         def get(path):
             if path == "":
@@ -88,7 +91,8 @@ class GuardrailTests(unittest.TestCase):
                         "allow_auto_merge": repo_auto_merge,
                         "default_branch": "main"}
             if path == "/pulls/17":
-                return proposal
+                pull_reads.append(path)
+                return proposal if len(pull_reads) == 1 or fresh_override is None else fresh_override
             if path == "/commits/synthetic-commit/check-runs?per_page=100":
                 return {"check_runs": runs, "total_count": len(runs)}
             if path == "/commits/synthetic-commit/status":
@@ -196,6 +200,65 @@ class GuardrailTests(unittest.TestCase):
         calls = self.simulate_main(pr(["agent:automerge"], state="behind"))
         self.assertEqual(len([x for x in calls if x[0] == "PUT"]), 1)
         self.assertFalse(any(x[1] == "/graphql" for x in calls))
+
+    def test_missing_check_run_total_count_fails_closed(self):
+        self.assertEqual(self.check_result(suite(), omit_total=True), (False, False))
+
+    def test_required_green_check_from_other_app_fails_closed(self):
+        for required in ("ci-ok", "check", "scan"):
+            with self.subTest(name=required):
+                checks = suite()
+                for check in checks:
+                    if check["name"] == required:
+                        check["app"]["slug"] = "untrusted-third-party"
+                self.assertEqual(self.check_result(checks), (False, False))
+
+    def test_required_green_check_without_app_fails_closed(self):
+        checks = suite()
+        del checks[0]["app"]
+        self.assertEqual(self.check_result(checks), (False, False))
+
+    def test_required_green_check_with_malformed_app_fails_closed(self):
+        checks = suite()
+        checks[0]["app"] = "github-actions"
+        self.assertEqual(self.check_result(checks), (False, False))
+
+    def test_duplicate_same_name_from_other_app_fails_closed(self):
+        checks = suite()
+        duplicate = success("ci-ok")
+        duplicate["app"]["slug"] = "untrusted-third-party"
+        checks.append(duplicate)
+        self.assertEqual(self.check_result(checks), (False, False))
+
+    def test_third_party_required_check_cannot_auto_enroll(self):
+        checks = suite()
+        checks[2]["app"]["slug"] = "untrusted-third-party"
+        calls = self.simulate_main(pr(["agent:automerge"]), runs=checks)
+        self.assertFalse(any(path == "/graphql" for _, path, _, _ in calls))
+
+    def test_source_head_changed_just_before_auto_merge_fails_closed(self):
+        proposal = pr(["agent:automerge"])
+        fresh = {**proposal, "head": {"sha": "new-unqualified-head",
+                                   "repo": {"full_name": TEST_REPO}}}
+        calls = self.simulate_main(proposal, fresh_override=fresh)
+        self.assertFalse(any(path == "/graphql" for _, path, _, _ in calls))
+
+    def test_revoked_optin_or_added_hold_before_auto_merge_fails_closed(self):
+        proposal = pr(["agent:automerge"])
+        for labels in ([], [{"name": "agent:hold"}]):
+            with self.subTest(labels=labels):
+                fresh = {**proposal, "labels": labels}
+                calls = self.simulate_main(proposal, fresh_override=fresh)
+                self.assertFalse(any(path == "/graphql" for _, path, _, _ in calls))
+
+    def test_draft_or_nondefault_base_changed_before_auto_merge_fails_closed(self):
+        proposal = pr(["agent:automerge"])
+        for fresh in ({**proposal, "draft": True},
+                      {**proposal, "base": {"ref": "other-branch"}}):
+            with self.subTest(fresh=fresh):
+                calls = self.simulate_main(proposal, fresh_override=fresh)
+                self.assertFalse(any(path == "/graphql" for _, path, _, _ in calls))
+
 
 
 if __name__ == "__main__":
