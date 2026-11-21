@@ -1470,6 +1470,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 					return replay, 0, 0, replayErr
 				}
 			}
+			if errors.Is(err, storeadmission.ErrAdmissionClientKeyConflict) {
+				return domain.SessionRecord{}, 0, 0, ErrClientRequestConflict
+			}
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStageEarly(ErrSpawnCreate, err)
 		}
 		// PromoteTaskPreparation does not write the artifact columns and the

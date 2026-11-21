@@ -338,6 +338,13 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 		ID:                  id,
 	})
 	if err != nil {
+		// Promoting a hidden preparation writes its client key by UPDATE, not
+		// INSERT. A durable queued claim can be created by another Manager
+		// after the preparation was inserted. Map the SQLite update fence to
+		// the same typed conflict used by ordinary client-key session seeds.
+		if strings.Contains(err.Error(), admissionKeySeedTriggerMessage) {
+			return false, ErrAdmissionClientKeyConflict
+		}
 		return false, fmt.Errorf("promote task preparation %s: %w", id, err)
 	}
 	return rows > 0, nil
