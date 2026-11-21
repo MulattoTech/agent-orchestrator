@@ -13,9 +13,12 @@ import (
 
 const admissionColumns = "id, project_id, operation, session_id, payload, state, generation, owner, attempts, failure_code, created_at, updated_at, available_at"
 
-// ErrAdmissionClientKeyConflict reports a durable key claim in a different
-// project. The caller maps it onto its public client-request conflict type.
-var ErrAdmissionClientKeyConflict = errors.New("admission client key belongs to another project")
+// ErrAdmissionClientKeyConflict reports a durable client-key claim that is
+// incompatible with the incoming command or another in-flight session seed.
+// The caller maps it onto its public client-request conflict type.
+var ErrAdmissionClientKeyConflict = errors.New("admission client key already owned by another command")
+
+const admissionKeySeedTriggerMessage = "admission queued key conflicts with session seed"
 
 // Admission commands use a transactional compare-and-swap claim. The SQL is
 // kept beside the transaction so the claim's generation/owner predicates are
@@ -32,7 +35,7 @@ func (s *Store) EnqueueSessionAdmission(ctx context.Context, rec domain.SessionA
 	existingErr := s.writeDB.QueryRowContext(ctx, "SELECT project_id,operation,payload FROM session_admission_queue WHERE id=?", rec.ID).Scan(&existingProject, &existingOperation, &existingPayload)
 	if existingErr == nil {
 		if existingProject != string(rec.ProjectID) || existingOperation != rec.Operation || existingPayload != rec.Payload {
-			return errors.New("admission request ID conflict")
+			return fmt.Errorf("%w: admission request ID conflict", ErrAdmissionClientKeyConflict)
 		}
 		return nil
 	}
@@ -67,10 +70,11 @@ func (s *Store) EnqueueSessionAdmission(ctx context.Context, rec domain.SessionA
 				WHERE operation='spawn' AND json_valid(payload)
 				AND json_extract(payload,'$.ClientRequestID')=? AND project_id<>?
 			)
+			AND NOT EXISTS (SELECT 1 FROM sessions WHERE client_request_id=?)
 			ON CONFLICT(id) DO NOTHING`,
 			rec.ID, rec.ProjectID, rec.Operation, rec.SessionID, rec.Payload,
 			admissionTime(rec.CreatedAt), admissionTime(rec.UpdatedAt), admissionTime(rec.AvailableAt),
-			incoming.ClientRequestID, rec.ProjectID)
+			incoming.ClientRequestID, rec.ProjectID, incoming.ClientRequestID)
 	} else {
 		_, err = s.writeDB.ExecContext(ctx, `INSERT INTO session_admission_queue
 			(id,project_id,operation,session_id,payload,state,created_at,updated_at,available_at)
@@ -89,7 +93,7 @@ func (s *Store) EnqueueSessionAdmission(ctx context.Context, rec domain.SessionA
 		return err
 	}
 	if project != string(rec.ProjectID) || operation != rec.Operation || payload != rec.Payload {
-		return errors.New("admission request ID conflict")
+		return fmt.Errorf("%w: admission request ID conflict", ErrAdmissionClientKeyConflict)
 	}
 	return nil
 }
