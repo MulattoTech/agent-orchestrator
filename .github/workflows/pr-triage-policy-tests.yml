@@ -1,0 +1,21 @@
+name: PR triage policy safety tests
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pr-triage-policy-tests.yml'
+      - '.github/workflows/agentic-pr-triage.yml'
+      - 'tools/ci/pr_backlog_triage.py'
+      - 'tools/ci/test_pr_backlog_triage.py'
+permissions:
+  contents: read
+jobs:
+  triage-policy-unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout pull-request source without saved credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Run isolated mocked policy tests (no token, no GitHub writes)
+        run: python3 -I -S -B -m unittest discover -s tools/ci -p test_pr_backlog_triage.py -v
